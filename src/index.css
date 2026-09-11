@@ -1,0 +1,24 @@
+@import "tailwindcss";
+
+/* Prevent mobile browser pull-to-refresh, bounce and swipe-to-navigate back gesture */
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+  overscroll-behavior-x: none;
+  overscroll-behavior-y: none;
+  background-color: #020617;
+}
+
+/* Touch & Mobile Optimization for FPS Game */
+.game-viewport {
+  touch-action: none !important;
+  -webkit-touch-callout: none !important;
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}

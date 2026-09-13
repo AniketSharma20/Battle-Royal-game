@@ -1,6 +1,6 @@
 {
   "name": "Unity 3D Survival FPS Developer Studio",
-  "description": "Production-ready Unity C# scripts and playable 3D simulator for a Battle Royale survival action game with humanoid soldier AI, open-world looting, shrinking storm zone, multi-weapon ballistics, and Victory Royale.",
+  "description": "Production-ready Unity C# scripts and playable 3D simulator for a Battle Royale survival action game with an expanded 480m open-world map, 6 tactical POIs, interactive explosive barrels, jump pads, supply air drops, humanoid soldier AI, shrinking storm zone, multi-weapon ballistics, and Victory Royale.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

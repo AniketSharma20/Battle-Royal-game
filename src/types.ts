@@ -81,4 +81,25 @@ export interface SetupStep {
   commonMistakes?: string[];
 }
 
+export interface POILocation {
+  name: string;
+  x: number;
+  z: number;
+  color: string;
+  description: string;
+}
+
+export interface ExplosiveBarrelData {
+  id: string;
+  x: number;
+  z: number;
+}
+
+export interface JumpPadData {
+  id: string;
+  x: number;
+  z: number;
+  force: number;
+}
+
 export type ViewTab = 'simulator' | 'scripts' | 'setup' | 'architecture' | 'tuner';

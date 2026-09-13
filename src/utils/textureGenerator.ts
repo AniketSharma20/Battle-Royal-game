@@ -310,5 +310,189 @@ export class TextureGenerator {
     this.setupTextureQuality(texture);
     return texture;
   }
+
+  // 8. Explosive Red Fuel Barrel Texture
+  static createExplosiveBarrelTexture(): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 512;
+    const ctx = canvas.getContext('2d')!;
+
+    // Vibrant danger red
+    ctx.fillStyle = '#dc2626';
+    ctx.fillRect(0, 0, 512, 512);
+
+    // Weathered barrel metal ridges
+    ctx.fillStyle = '#991b1b';
+    ctx.fillRect(0, 80, 512, 28);
+    ctx.fillRect(0, 240, 512, 32);
+    ctx.fillRect(0, 400, 512, 28);
+
+    // Steel bands
+    ctx.fillStyle = '#52525b';
+    ctx.fillRect(0, 90, 512, 10);
+    ctx.fillRect(0, 250, 512, 12);
+    ctx.fillRect(0, 410, 512, 10);
+
+    // Yellow hazard diamond and label
+    ctx.fillStyle = '#facc15';
+    ctx.beginPath();
+    ctx.moveTo(256, 130);
+    ctx.lineTo(330, 195);
+    ctx.lineTo(256, 260);
+    ctx.lineTo(182, 195);
+    ctx.closePath();
+    ctx.fill();
+
+    // Flame stencil symbol
+    ctx.fillStyle = '#b91c1c';
+    ctx.font = 'bold 36px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('🔥', 256, 210);
+
+    // Big Stencil text
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = '900 36px monospace';
+    ctx.fillText('EXPLOSIVE', 256, 320);
+    ctx.fillStyle = '#fef08a';
+    ctx.font = 'bold 22px monospace';
+    ctx.fillText('HIGH FLAMMABILITY', 256, 355);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    this.setupTextureQuality(texture);
+    return texture;
+  }
+
+  // 9. High-tier Legendary Supply Drop Crate Texture
+  static createSupplyCrateTexture(): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 512;
+    const ctx = canvas.getContext('2d')!;
+
+    // Military deep navy/slate blue
+    ctx.fillStyle = '#1e3a8a';
+    ctx.fillRect(0, 0, 512, 512);
+
+    // Reinforced titanium brackets
+    ctx.strokeStyle = '#f59e0b';
+    ctx.lineWidth = 16;
+    ctx.strokeRect(12, 12, 488, 488);
+
+    // Cross braces
+    ctx.strokeStyle = '#d97706';
+    ctx.lineWidth = 12;
+    ctx.beginPath();
+    ctx.moveTo(20, 20);
+    ctx.lineTo(492, 492);
+    ctx.moveTo(492, 20);
+    ctx.lineTo(20, 492);
+    ctx.stroke();
+
+    // Golden parachute emblem / logo
+    ctx.fillStyle = '#fbbf24';
+    ctx.font = '900 36px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('AIR DROP', 256, 240);
+    ctx.font = 'bold 22px monospace';
+    ctx.fillStyle = '#fef3c7';
+    ctx.fillText('HIGH TIER ARSENAL', 256, 280);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    this.setupTextureQuality(texture);
+    return texture;
+  }
+
+  // 10. Sci-fi Launch / Jump Pad Texture
+  static createJumpPadTexture(): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 512;
+    const ctx = canvas.getContext('2d')!;
+
+    // Dark chassis
+    ctx.fillStyle = '#09090b';
+    ctx.fillRect(0, 0, 512, 512);
+
+    // Glowing cyan propulsion rings
+    ctx.strokeStyle = '#06b6d4';
+    ctx.lineWidth = 14;
+    ctx.beginPath();
+    ctx.arc(256, 256, 220, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.strokeStyle = '#22d3ee';
+    ctx.lineWidth = 10;
+    ctx.beginPath();
+    ctx.arc(256, 256, 150, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Upward chevron arrows
+    ctx.fillStyle = '#67e8f9';
+    for (let i = 0; i < 3; i++) {
+      const cy = 200 + i * 45;
+      ctx.beginPath();
+      ctx.moveTo(256, cy - 30);
+      ctx.lineTo(310, cy + 10);
+      ctx.lineTo(290, cy + 15);
+      ctx.lineTo(256, cy - 10);
+      ctx.lineTo(222, cy + 15);
+      ctx.lineTo(202, cy + 10);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    const texture = new THREE.CanvasTexture(canvas);
+    this.setupTextureQuality(texture);
+    return texture;
+  }
+
+  // 11. Airfield Runway with Touchdown Markers & Numbers
+  static createRunwayTexture(): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 1024;
+    const ctx = canvas.getContext('2d')!;
+
+    // Dark tar asphalt
+    ctx.fillStyle = '#3f3f46';
+    ctx.fillRect(0, 0, 512, 1024);
+
+    // Weathering
+    for (let i = 0; i < 40000; i++) {
+      ctx.fillStyle = Math.random() > 0.5 ? '#27272a' : '#52525b';
+      ctx.fillRect(Math.random() * 512, Math.random() * 1024, 2, 2);
+    }
+
+    // White threshold stripes at top and bottom
+    ctx.fillStyle = '#ffffff';
+    for (let i = 0; i < 8; i++) {
+      ctx.fillRect(40 + i * 55, 20, 32, 120);
+      ctx.fillRect(40 + i * 55, 884, 32, 120);
+    }
+
+    // Runway Number
+    ctx.font = '900 72px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('09L', 256, 230);
+    ctx.fillText('27R', 256, 840);
+
+    // Centerline dashed runway markings
+    for (let y = 300; y < 750; y += 90) {
+      ctx.fillRect(246, y, 20, 55);
+    }
+
+    // Yellow side borders
+    ctx.fillStyle = '#eab308';
+    ctx.fillRect(10, 0, 12, 1024);
+    ctx.fillRect(490, 0, 12, 1024);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(1, 4);
+    this.setupTextureQuality(texture);
+    return texture;
+  }
 }
 

@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
-import { GameSettings, WeaponType, WeaponData, LootItem, KillFeedItem } from '../types';
+import { GameSettings, WeaponType, WeaponData, LootItem, KillFeedItem, POILocation } from '../types';
 import { sounds } from '../utils/soundEffects';
 import { TextureGenerator } from '../utils/textureGenerator';
+import { MapBuilder, ExplosiveBarrelInstance, JumpPadInstance } from '../utils/mapBuilder';
 import { GameGuideModal } from './GameGuideModal';
 import confetti from 'canvas-confetti';
 import {
@@ -30,13 +31,11 @@ import {
   Gamepad2,
   Pause,
   Smartphone,
-  RotateCw,
-  Code2
+  RotateCw
 } from 'lucide-react';
 
 interface ThreeFPSGameProps {
   settings: GameSettings;
-  onOpenStudio?: () => void;
 }
 
 // Arsenal Definitions
@@ -123,7 +122,7 @@ interface ImpactSpark {
   duration: number;
 }
 
-export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStudio }) => {
+export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const radarCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -138,7 +137,7 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
   const [isAimingDownSights, setIsAimingDownSights] = useState(false);
 
   // Battle Royale Telemetry
-  const [playersAlive, setPlayersAlive] = useState(15);
+  const [playersAlive, setPlayersAlive] = useState(21);
   const [playerKills, setPlayerKills] = useState(0);
   const [stormPhase, setStormPhase] = useState(1);
   const [stormTimer, setStormTimer] = useState(45);
@@ -152,6 +151,7 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
   const [isVictory, setIsVictory] = useState(false);
   const [isGameOver, setIsGameOver] = useState(false);
   const [hasStartedPlaying, setHasStartedPlaying] = useState(false);
+  const [dropPhase, setDropPhase] = useState<'in_plane' | 'freefall' | 'parachute' | 'landed'>('in_plane');
   const [isMatchPaused, setIsMatchPaused] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isTouchDevice, setIsTouchDevice] = useState(false);
@@ -164,9 +164,18 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
     'Find glowing supply crates for weapons & armor! [Press E]'
   );
 
-  // Control Enhancements
+  // Control Enhancements (Default to TRUE so virtual controls are immediately visible on mobile/touch)
   const [mouseSensitivity, setMouseSensitivity] = useState(2.0);
-  const [showOnScreenControls, setShowOnScreenControls] = useState(false);
+  const [showOnScreenControls, setShowOnScreenControls] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return (
+        'ontouchstart' in window ||
+        navigator.maxTouchPoints > 0 ||
+        window.innerWidth <= 1024
+      );
+    }
+    return true;
+  });
   const [showGuideModal, setShowGuideModal] = useState(false);
 
   // Crosshair & Feedback
@@ -211,11 +220,12 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
     },
     isReloading: false,
     isAimingDownSights: false,
-    playersAlive: 15,
+    playersAlive: 21,
     playerKills: 0,
     shotsFired: 0,
     shotsHit: 0,
     hasStartedPlaying: false,
+    dropPhase: 'in_plane' as 'in_plane' | 'freefall' | 'parachute' | 'landed',
     isPaused: false,
     isGameOver: false,
     isVictory: false,
@@ -224,7 +234,7 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
     isFiringContinuous: false,
     settings,
     mouseSensitivity: 2.0,
-    stormRadius: 130,
+    stormRadius: 210,
     stormCenter: new THREE.Vector3(0, 0, 0),
     isInsideSafeZone: true,
     compassHeading: 0,
@@ -320,7 +330,7 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
     const scene = new THREE.Scene();
     // Crystal-clear azure sky with distant horizon fog for maximum visual clarity
     scene.background = new THREE.Color(0x38bdf8);
-    scene.fog = new THREE.Fog(0x93c5fd, 180, 520);
+    scene.fog = new THREE.Fog(0x38bdf8, 400, 1800);
 
     // 2. CAMERA (First Person Player View)
     const isMobileDevice =
@@ -335,19 +345,20 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
       75,
       initialWidth / (initialHeight || 1),
       0.1,
-      1200
+      2500
     );
-    camera.position.set(0, 1.85, 20);
+    camera.position.set(0, 300, 0);
 
     // 3. RENDERER with Antialiasing, Tone Mapping & Soft Shadows for ultra-crisp graphics
     const renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: !isMobileDevice,
-      powerPreference: 'high-performance'
+      antialias: !isMobileDevice, // Disable on mobile to save performance
+      powerPreference: 'high-performance',
+      precision: isMobileDevice ? 'mediump' : 'highp'
     });
     renderer.setSize(initialWidth, initialHeight);
-    renderer.setPixelRatio(isMobileDevice ? Math.min(window.devicePixelRatio, 1.25) : Math.min(window.devicePixelRatio, 2));
-    renderer.shadowMap.enabled = true;
+    renderer.setPixelRatio(isMobileDevice ? Math.min(window.devicePixelRatio, 1) : Math.min(window.devicePixelRatio, 1.5));
+    renderer.shadowMap.enabled = !isMobileDevice; // Disable expensive shadows on mobile entirely
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.15;
@@ -360,17 +371,19 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
 
     const sunLight = new THREE.DirectionalLight(0xfffaed, 1.55);
     sunLight.position.set(100, 180, 80);
-    sunLight.castShadow = true;
-    sunLight.shadow.mapSize.width = isMobileDevice ? 1024 : 2048;
-    sunLight.shadow.mapSize.height = isMobileDevice ? 1024 : 2048;
-    sunLight.shadow.camera.near = 0.5;
-    sunLight.shadow.camera.far = 500;
-    const d = 160;
-    sunLight.shadow.camera.left = -d;
-    sunLight.shadow.camera.right = d;
-    sunLight.shadow.camera.top = d;
-    sunLight.shadow.camera.bottom = -d;
-    sunLight.shadow.bias = -0.0003;
+    if (!isMobileDevice) {
+      sunLight.castShadow = true;
+      sunLight.shadow.mapSize.width = 1024;
+      sunLight.shadow.mapSize.height = 1024;
+      sunLight.shadow.camera.near = 0.5;
+      sunLight.shadow.camera.far = 500;
+      const d = 160;
+      sunLight.shadow.camera.left = -d;
+      sunLight.shadow.camera.right = d;
+      sunLight.shadow.camera.top = d;
+      sunLight.shadow.camera.bottom = -d;
+      sunLight.shadow.bias = -0.0005;
+    }
     scene.add(sunLight);
 
     // Crisp ambient fill light for crystal-clear shadow details
@@ -391,8 +404,9 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
       transparent: true,
       opacity: 0.85
     });
-    for (let c = 0; c < 20; c++) {
-      const cloudGeo = new THREE.DodecahedronGeometry(Math.random() * 15 + 20, 1);
+    const numClouds = isMobileDevice ? 6 : 20;
+    for (let c = 0; c < numClouds; c++) {
+      const cloudGeo = new THREE.DodecahedronGeometry(Math.random() * 15 + 20, isMobileDevice ? 0 : 1);
       const cloud = new THREE.Mesh(cloudGeo, cloudMat);
       cloud.position.set(
         (Math.random() - 0.5) * 600,
@@ -404,359 +418,91 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
     }
     scene.add(cloudsGroup);
 
-    // Perimeter Mountain Silhouettes (Ring of jagged peaks around the 260m island)
-    const mountainGroup = new THREE.Group();
-    const mountainMat = new THREE.MeshLambertMaterial({ color: 0x475569 });
-    for (let m = 0; m < 32; m++) {
-      const angle = (m / 32) * Math.PI * 2;
-      const dist = 240 + (m % 3) * 20;
-      const mx = Math.cos(angle) * dist;
-      const mz = Math.sin(angle) * dist;
-      const mHeight = 45 + Math.sin(m * 1.5) * 25 + Math.random() * 15;
-      const mGeo = new THREE.ConeGeometry(28 + Math.random() * 15, mHeight, 5);
-      const mMesh = new THREE.Mesh(mGeo, mountainMat);
-      mMesh.position.set(mx, mHeight / 2 - 5, mz);
-      mountainGroup.add(mMesh);
-    }
-    scene.add(mountainGroup);
-
-    // 5. BATTLE ROYALE MAP & HIGH-QUALITY PROCEDURAL TEXTURES
-    const mapSize = 280;
-
-    // Rock-solid analytical terrain height function:
-    // Guarantees central combat arena (radius <= 85m) is flat at y = 0
-    // Eliminates all ground clipping, sinking into the ground, or buried roads/props!
-    const getTerrainHeight = (x: number, z: number): number => {
-      const dist = Math.sqrt(x * x + z * z);
-      if (dist <= 85) {
-        return 0;
-      }
-      if (dist <= 115) {
-        const t = (dist - 85) / 30;
-        const smoothT = t * t * (3 - 2 * t);
-        const hillH = (Math.sin(x * 0.06) + Math.cos(z * 0.06)) * 1.6;
-        return Math.max(0, hillH * smoothT);
-      }
-      const rim = dist - 115;
-      return 2.5 + Math.pow(rim * 0.14, 1.9) + (Math.sin(x * 0.08) + Math.cos(z * 0.08)) * 1.8;
-    };
-
-    // Terrain with procedural grass/dirt canvas texture & vertex height mapping
-    const grassTexture = TextureGenerator.createGrassTexture();
-    const terrainGeo = new THREE.PlaneGeometry(mapSize, mapSize, 64, 64);
-    terrainGeo.rotateX(-Math.PI / 2);
-
-    const posAttr = terrainGeo.attributes.position;
-    for (let i = 0; i < posAttr.count; i++) {
-      const x = posAttr.getX(i);
-      const z = posAttr.getZ(i);
-      posAttr.setY(i, getTerrainHeight(x, z));
-    }
-    terrainGeo.computeVertexNormals();
-
-    const terrainMat = new THREE.MeshLambertMaterial({
-      map: grassTexture
-    });
-    const terrain = new THREE.Mesh(terrainGeo, terrainMat);
-    terrain.receiveShadow = true;
-    scene.add(terrain);
-
-    // Thick solid bedrock foundation under the entire island (so ground has real thickness and zero void show-through)
-    const bedrockGeo = new THREE.BoxGeometry(mapSize + 2, 20, mapSize + 2);
-    const bedrockMat = new THREE.MeshLambertMaterial({ color: 0x18181b });
-    const bedrock = new THREE.Mesh(bedrockGeo, bedrockMat);
-    bedrock.position.set(0, -10.01, 0);
-    scene.add(bedrock);
-
-    // Asphalt Highways with realistic road markings (elevated cleanly at y = 0.06 over level ground)
-    const roadTexture = TextureGenerator.createRoadTexture();
-    const roadGeo = new THREE.PlaneGeometry(12, 170);
-    roadGeo.rotateX(-Math.PI / 2);
-    const roadMat = new THREE.MeshLambertMaterial({ map: roadTexture });
-    const road = new THREE.Mesh(roadGeo, roadMat);
-    road.position.set(0, 0.06, 0);
-    road.receiveShadow = true;
-    scene.add(road);
-
-    const roadCross = new THREE.Mesh(roadGeo, roadMat);
-    roadCross.rotation.y = Math.PI / 2;
-    roadCross.position.set(0, 0.08, 0);
-    roadCross.receiveShadow = true;
-    scene.add(roadCross);
-
-    // Shared procedural textures and materials for structures
-    const concreteTex = TextureGenerator.createConcreteWallTexture('#64748b');
-    const containerRedTex = TextureGenerator.createContainerTexture('#991b1b');
-    const containerBlueTex = TextureGenerator.createContainerTexture('#1e40af');
-    const containerGreenTex = TextureGenerator.createContainerTexture('#166534');
-    const containerRedMat = new THREE.MeshLambertMaterial({ map: containerRedTex });
-    const containerBlueMat = new THREE.MeshLambertMaterial({ map: containerBlueTex });
-    const containerGreenMat = new THREE.MeshLambertMaterial({ map: containerGreenTex });
-    const woodTex = TextureGenerator.createWoodPlankTexture();
-    const hazardTex = TextureGenerator.createHazardStripeTexture();
-
-    // Arrays for collision and bullet impact targets
-    const collidableMeshes: THREE.Object3D[] = [];
+    // Tracers and spark particle tracking
     const tracers: BulletTracer[] = [];
     const impactSparks: ImpactSpark[] = [];
 
-    // Helper: Build detailed military watchtower
-    const buildWatchtower = (x: number, z: number) => {
-      const towerGroup = new THREE.Group();
-      towerGroup.position.set(x, getTerrainHeight(x, z), z);
+    // AIRPLANE MODEL (C-130 style drop plane)
+    const airplaneGroup = new THREE.Group();
+    const fuseGeo = new THREE.CylinderGeometry(4.5, 4.5, 36, 16);
+    fuseGeo.rotateX(Math.PI / 2);
+    const planeMat = new THREE.MeshLambertMaterial({ color: 0x475569 }); // slate-600
+    const fuselage = new THREE.Mesh(fuseGeo, planeMat);
+    airplaneGroup.add(fuselage);
+    
+    const wingGeo = new THREE.BoxGeometry(45, 1.2, 7);
+    const wingMat = new THREE.MeshLambertMaterial({ color: 0x334155 }); // slate-700
+    const wings = new THREE.Mesh(wingGeo, wingMat);
+    wings.position.set(0, 2, 2);
+    airplaneGroup.add(wings);
+    
+    const tailGeo = new THREE.BoxGeometry(14, 1.2, 5);
+    const tail = new THREE.Mesh(tailGeo, wingMat);
+    tail.position.set(0, 2, -15);
+    airplaneGroup.add(tail);
+    
+    const finGeo = new THREE.BoxGeometry(1.2, 7, 5);
+    const fin = new THREE.Mesh(finGeo, wingMat);
+    fin.position.set(0, 5, -15);
+    airplaneGroup.add(fin);
+    
+    let planeZ = -550;
+    airplaneGroup.position.set(0, 320, planeZ);
+    scene.add(airplaneGroup);
 
-      const stiltGeo = new THREE.CylinderGeometry(0.3, 0.35, 10, 8);
-      const stiltMat = new THREE.MeshLambertMaterial({ color: 0x334155 });
-      const offsets = [
-        [-3, -3],
-        [3, -3],
-        [-3, 3],
-        [3, 3]
-      ];
-      offsets.forEach(([ox, oz]) => {
-        const stilt = new THREE.Mesh(stiltGeo, stiltMat);
-        stilt.position.set(ox, 5, oz);
-        stilt.castShadow = true;
-        towerGroup.add(stilt);
-      });
+    // PARACHUTE MODEL (Attached to player during drop)
+    const parachuteGroup = new THREE.Group();
+    const chuteGeo = new THREE.SphereGeometry(6, 16, 16, 0, Math.PI * 2, 0, Math.PI / 2);
+    const chuteMat = new THREE.MeshLambertMaterial({ color: 0xeab308, side: THREE.DoubleSide }); // Yellow parachute
+    const chute = new THREE.Mesh(chuteGeo, chuteMat);
+    chute.position.set(0, 5, 0);
+    chute.scale.set(1, 0.45, 1);
+    parachuteGroup.add(chute);
+    
+    const cordGeo = new THREE.CylinderGeometry(0.02, 0.02, 6.5);
+    const cordMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    for(let i = 0; i < 4; i++) {
+        const cord = new THREE.Mesh(cordGeo, cordMat);
+        cord.position.set(i < 2 ? 3 : -3, 2.5, i % 2 === 0 ? 3 : -3);
+        cord.rotation.z = i < 2 ? 0.35 : -0.35;
+        cord.rotation.x = i % 2 === 0 ? -0.35 : 0.35;
+        parachuteGroup.add(cord);
+    }
+    parachuteGroup.visible = false;
+    scene.add(parachuteGroup);
 
-      // Platform
-      const platGeo = new THREE.BoxGeometry(8, 0.6, 8);
-      const platMat = new THREE.MeshLambertMaterial({ map: woodTex });
-      const platform = new THREE.Mesh(platGeo, platMat);
-      platform.position.set(0, 10, 0);
-      platform.castShadow = true;
-      platform.receiveShadow = true;
-      towerGroup.add(platform);
-      collidableMeshes.push(platform);
+    // PLAYER DROP DUMMY (Visible only in 3rd person skydive)
+    const playerDropDummy = new THREE.Group();
+playerDropDummy.visible = false;
+    scene.add(playerDropDummy);
 
-      // Guard Rails
-      const railGeo = new THREE.BoxGeometry(8, 1.2, 0.3);
-      const railMat = new THREE.MeshLambertMaterial({ color: 0x64748b });
-      const rails = [
-        [0, 10.6, -3.8],
-        [0, 10.6, 3.8]
-      ];
-      rails.forEach(([rx, ry, rz]) => {
-        const rail = new THREE.Mesh(railGeo, railMat);
-        rail.position.set(rx, ry, rz);
-        towerGroup.add(rail);
-      });
+    // 5. EXPANDED BATTLE ROYALE MAP (1000m Island)
+    const {
+      terrain,
+      collidableMeshes,
+      interactiveBarrels,
+      jumpPads,
+      pois,
+      getTerrainHeight
+    } = MapBuilder.buildMap(scene, isMobileDevice);
 
-      // Roof
-      const roofGeo = new THREE.ConeGeometry(6.5, 2.5, 4);
-      const roofMat = new THREE.MeshLambertMaterial({ color: 0x1e293b });
-      const roof = new THREE.Mesh(roofGeo, roofMat);
-      roof.rotation.y = Math.PI / 4;
-      roof.position.set(0, 13.5, 0);
-      towerGroup.add(roof);
 
-      scene.add(towerGroup);
-    };
 
-    // Helper: Build compound concrete building
-    const buildCompoundBuilding = (
-      x: number,
-      z: number,
-      w: number,
-      h: number,
-      d: number,
-      label?: string
-    ) => {
-      const bldgGroup = new THREE.Group();
-      bldgGroup.position.set(x, getTerrainHeight(x, z) + h / 2, z);
 
-      const bldgGeo = new THREE.BoxGeometry(w, h, d);
-      const bldgMat = new THREE.MeshLambertMaterial({ map: concreteTex });
-      const bldgMesh = new THREE.Mesh(bldgGeo, bldgMat);
-      bldgMesh.castShadow = true;
-      bldgMesh.receiveShadow = true;
-      bldgGroup.add(bldgMesh);
-      collidableMeshes.push(bldgMesh);
-
-      // Roof rim
-      const rimGeo = new THREE.BoxGeometry(w + 0.6, 0.4, d + 0.6);
-      const rimMat = new THREE.MeshLambertMaterial({ color: 0x1e293b });
-      const rimMesh = new THREE.Mesh(rimGeo, rimMat);
-      rimMesh.position.set(0, h / 2 + 0.2, 0);
-      bldgGroup.add(rimMesh);
-
-      // Hazard stripe foundation base
-      const baseGeo = new THREE.BoxGeometry(w + 0.2, 0.8, d + 0.2);
-      const baseMat = new THREE.MeshLambertMaterial({ map: hazardTex });
-      const baseMesh = new THREE.Mesh(baseGeo, baseMat);
-      baseMesh.position.set(0, -h / 2 + 0.4, 0);
-      bldgGroup.add(baseMesh);
-
-      scene.add(bldgGroup);
-    };
-
-    // Helper: Build military pine tree
-    const buildPineTree = (x: number, z: number) => {
-      const treeGroup = new THREE.Group();
-      treeGroup.position.set(x, getTerrainHeight(x, z), z);
-
-      const trunkGeo = new THREE.CylinderGeometry(0.35, 0.55, 3.5, 6);
-      const trunkMat = new THREE.MeshLambertMaterial({ color: 0x3d2817 });
-      const trunk = new THREE.Mesh(trunkGeo, trunkMat);
-      trunk.position.y = 1.75;
-      trunk.castShadow = true;
-      treeGroup.add(trunk);
-      collidableMeshes.push(trunk);
-
-      const foliageMat = new THREE.MeshLambertMaterial({ color: 0x14532d });
-      const layers = [
-        { r: 3.0, h: 3.8, y: 4.2 },
-        { r: 2.4, h: 3.2, y: 6.5 },
-        { r: 1.6, h: 2.6, y: 8.5 }
-      ];
-      layers.forEach(({ r, h, y }) => {
-        const cone = new THREE.Mesh(new THREE.ConeGeometry(r, h, 6), foliageMat);
-        cone.position.y = y;
-        cone.castShadow = true;
-        treeGroup.add(cone);
-      });
-
-      scene.add(treeGroup);
-    };
-
-    // Helper: Build shipping container
-    const buildContainer = (x: number, z: number, rotY: number, mat: THREE.Material) => {
-      const cGeo = new THREE.BoxGeometry(3.5, 3.2, 8);
-      const cMesh = new THREE.Mesh(cGeo, mat);
-      cMesh.position.set(x, getTerrainHeight(x, z) + 1.6, z);
-      cMesh.rotation.y = rotY;
-      cMesh.castShadow = true;
-      cMesh.receiveShadow = true;
-      scene.add(cMesh);
-      collidableMeshes.push(cMesh);
-    };
-
-    // Helper: Build concrete barricade
-    const buildBarrier = (x: number, z: number, rotY: number) => {
-      const bGeo = new THREE.BoxGeometry(4.0, 1.4, 0.8);
-      const bMat = new THREE.MeshLambertMaterial({ map: concreteTex });
-      const bMesh = new THREE.Mesh(bGeo, bMat);
-      bMesh.position.set(x, getTerrainHeight(x, z) + 0.7, z);
-      bMesh.rotation.y = rotY;
-      bMesh.castShadow = true;
-      bMesh.receiveShadow = true;
-      scene.add(bMesh);
-      collidableMeshes.push(bMesh);
-    };
-
-    // Helper: Build military sandbag fortification
-    const sandbagTex = TextureGenerator.createWoodPlankTexture();
-    const sandbagMat = new THREE.MeshStandardMaterial({ color: 0x856845, roughness: 0.9 });
-    const buildSandbagFortification = (x: number, z: number, rotY: number) => {
-      const sbGroup = new THREE.Group();
-      sbGroup.position.set(x, getTerrainHeight(x, z), z);
-      sbGroup.rotation.y = rotY;
-
-      const bagGeo = new THREE.BoxGeometry(1.2, 0.35, 0.55);
-      // Stack 3 layers of sandbags
-      for (let layer = 0; layer < 3; layer++) {
-        const count = 3;
-        for (let b = 0; b < count; b++) {
-          const bag = new THREE.Mesh(bagGeo, sandbagMat);
-          const offsetX = (b - 1) * 1.15 + (layer % 2 === 1 ? 0.5 : 0);
-          bag.position.set(offsetX, 0.2 + layer * 0.32, 0);
-          bag.castShadow = true;
-          bag.receiveShadow = true;
-          sbGroup.add(bag);
-          collidableMeshes.push(bag);
-        }
-      }
-      scene.add(sbGroup);
-    };
-
-    // Helper: Build military supply crates
-    const buildSupplyCrateStack = (x: number, z: number) => {
-      const crateGeo = new THREE.BoxGeometry(1.6, 1.6, 1.6);
-      const crateMat = new THREE.MeshLambertMaterial({ map: woodTex });
-      const baseHeight = getTerrainHeight(x, z);
-      const c1 = new THREE.Mesh(crateGeo, crateMat);
-      c1.position.set(x, baseHeight + 0.8, z);
-      c1.castShadow = true;
-      scene.add(c1);
-      collidableMeshes.push(c1);
-
-      const c2 = new THREE.Mesh(crateGeo, crateMat);
-      c2.position.set(x + 1.2, baseHeight + 0.8, z + 0.5);
-      c2.rotation.y = 0.2;
-      c2.castShadow = true;
-      scene.add(c2);
-      collidableMeshes.push(c2);
-    };
-
-    // Populate Key Landmarks:
-    // Compound A: Military Base (North-East)
-    buildCompoundBuilding(50, -50, 24, 8, 16, 'BASE-A');
-    buildCompoundBuilding(80, -50, 16, 7, 20, 'HANGAR-1');
-    buildContainer(40, -35, 0.3, containerRedMat);
-    buildContainer(46, -35, 0.3, containerBlueMat);
-    buildWatchtower(65, -30);
-    buildSandbagFortification(61, -30, 0);
-    buildSandbagFortification(69, -30, 0);
-    buildBarrier(48, -25, 0);
-    buildBarrier(54, -25, 0);
-    buildSupplyCrateStack(58, -40);
-
-    // Compound B: Industrial Outpost (South-West)
-    buildCompoundBuilding(-55, 55, 26, 9, 18, 'FACTORY-B');
-    buildCompoundBuilding(-85, 45, 18, 6, 14, 'DEPOT-2');
-    buildContainer(-42, 45, -0.4, containerGreenMat);
-    buildContainer(-42, 53, -0.4, containerRedMat);
-    buildWatchtower(-68, 70);
-    buildSandbagFortification(-68, 65, Math.PI / 2);
-    buildBarrier(-50, 38, 0.5);
-    buildSupplyCrateStack(-60, 48);
-
-    // Compound C: Central Crossroads Depot
-    buildCompoundBuilding(-22, -15, 14, 5, 12, 'DEPOT-C');
-    buildCompoundBuilding(25, 20, 16, 6, 14, 'ARMORY');
-    buildWatchtower(0, 0);
-    buildSandbagFortification(0, -4, 0);
-    buildSandbagFortification(0, 4, 0);
-    buildBarrier(-8, 8, 0.7);
-    buildBarrier(8, -8, 0.7);
-
-    // Scatter Pine Trees across forests
-    const treeCoords = [
-      [-15, -45],
-      [-25, -55],
-      [-38, -48],
-      [-50, -30],
-      [-65, -15],
-      [-75, -60],
-      [15, -75],
-      [30, -85],
-      [-10, 45],
-      [-20, 65],
-      [-35, 80],
-      [-75, 25],
-      [45, 15],
-      [60, 30],
-      [75, -15],
-      [-5, -10],
-      [10, -25],
-      [-40, 0]
-    ];
-    treeCoords.forEach(([tx, tz]) => buildPineTree(tx, tz));
 
     // Atmospheric Battlefield Dust / Wind Drift Particles
-    const particleCount = 180;
+    const particleCount = 260;
     const pGeo = new THREE.BufferGeometry();
     const pPositions = new Float32Array(particleCount * 3);
     for (let p = 0; p < particleCount * 3; p += 3) {
-      pPositions[p] = (Math.random() - 0.5) * 260;
-      pPositions[p + 1] = Math.random() * 22 + 0.5;
-      pPositions[p + 2] = (Math.random() - 0.5) * 260;
+      pPositions[p] = (Math.random() - 0.5) * 440;
+      pPositions[p + 1] = Math.random() * 26 + 0.5;
+      pPositions[p + 2] = (Math.random() - 0.5) * 440;
     }
     pGeo.setAttribute('position', new THREE.BufferAttribute(pPositions, 3));
     const pMat = new THREE.PointsMaterial({
       color: 0xfef08a,
-      size: 0.28,
+      size: 0.32,
       transparent: true,
       opacity: 0.45,
       blending: THREE.AdditiveBlending
@@ -770,7 +516,8 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
     let isShrinkActive = false;
     let stormDamageTimer = 0;
 
-    const stormCylinderGeo = new THREE.CylinderGeometry(130, 130, 60, 48, 1, true);
+    const initialStormR = 480;
+    const stormCylinderGeo = new THREE.CylinderGeometry(initialStormR, initialStormR, 75, 64, 1, true);
     const stormMat = new THREE.MeshBasicMaterial({
       color: 0x38bdf8,
       transparent: true,
@@ -778,11 +525,11 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
       side: THREE.DoubleSide
     });
     const stormCylinder = new THREE.Mesh(stormCylinderGeo, stormMat);
-    stormCylinder.position.set(0, 30, 0);
+    stormCylinder.position.set(0, 37.5, 0);
     scene.add(stormCylinder);
 
     // Storm glowing edge ring on the ground
-    const ringGeo = new THREE.RingGeometry(129, 131, 48);
+    const ringGeo = new THREE.RingGeometry(initialStormR - 1.5, initialStormR + 1.5, 64);
     ringGeo.rotateX(-Math.PI / 2);
     const ringMat = new THREE.MeshBasicMaterial({
       color: 0x06b6d4,
@@ -851,18 +598,41 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
       });
     };
 
-    // Strategic Loot Points
+    // Strategic Loot Points across all 6 POIs on the expanded 1000m map
     const lootSpawnPoints = [
-      { id: 'l1', type: 'rifle' as const, name: 'M4A1 Assault Rifle', hex: 0x3b82f6, pos: new THREE.Vector3(0, 0, 12) },
-      { id: 'l2', type: 'shield' as const, name: 'Shield Potion (+50)', hex: 0x06b6d4, pos: new THREE.Vector3(-5, 0, 15) },
-      { id: 'l3', type: 'medkit' as const, name: 'Medkit (+50 HP)', hex: 0x22c55e, pos: new THREE.Vector3(5, 0, 15) },
-      { id: 'l4', type: 'shotgun' as const, name: 'SPAS-12 Shotgun', hex: 0xf59e0b, pos: new THREE.Vector3(42, 0, -28) },
-      { id: 'l5', type: 'shield' as const, name: 'Shield Potion (+50)', hex: 0x06b6d4, pos: new THREE.Vector3(56, 0, -22) },
-      { id: 'l6', type: 'sniper' as const, name: 'AWM Sniper Rifle', hex: 0xec4899, pos: new THREE.Vector3(0, 10.3, 0) }, // In center watchtower!
-      { id: 'l7', type: 'ammo' as const, name: 'Heavy Ammo Pack', hex: 0xf59e0b, pos: new THREE.Vector3(-45, 0, 48) },
-      { id: 'l8', type: 'medkit' as const, name: 'Medkit (+50 HP)', hex: 0x22c55e, pos: new THREE.Vector3(-55, 0, 40) },
-      { id: 'l9', type: 'sniper' as const, name: 'AWM Sniper Rifle', hex: 0xec4899, pos: new THREE.Vector3(65, 10.3, -30) },
-      { id: 'l10', type: 'shield' as const, name: 'Shield Potion (+50)', hex: 0x06b6d4, pos: new THREE.Vector3(-68, 10.3, 70) }
+      // Central Plaza & HQ
+      { id: 'l1', type: 'rifle' as const, name: 'M4A1 Assault Rifle', hex: 0x3b82f6, pos: new THREE.Vector3(0, 0, 15) },
+      { id: 'l2', type: 'shield' as const, name: 'Shield Potion (+50)', hex: 0x06b6d4, pos: new THREE.Vector3(-4, 0, 18) },
+      { id: 'l3', type: 'medkit' as const, name: 'Medkit (+50 HP)', hex: 0x22c55e, pos: new THREE.Vector3(4, 0, 18) },
+      { id: 'l4', type: 'shotgun' as const, name: 'SPAS-12 Shotgun', hex: 0xf59e0b, pos: new THREE.Vector3(20, 0, -10) },
+      { id: 'l5', type: 'ammo' as const, name: 'Heavy Ammo Pack', hex: 0xf59e0b, pos: new THREE.Vector3(-20, 0, -10) },
+
+      // Airfield & Hangars
+      { id: 'l6', type: 'rifle' as const, name: 'M4A1 Assault Rifle', hex: 0x3b82f6, pos: new THREE.Vector3(-280, 0, -40) },
+      { id: 'l7', type: 'shotgun' as const, name: 'SPAS-12 Shotgun', hex: 0xf59e0b, pos: new THREE.Vector3(-330, 0, -30) },
+      { id: 'l8', type: 'shield' as const, name: 'Shield Potion (+50)', hex: 0x06b6d4, pos: new THREE.Vector3(-230, 0, -50) },
+      { id: 'l9', type: 'ammo' as const, name: 'Heavy Ammo Pack', hex: 0xf59e0b, pos: new THREE.Vector3(-280, 0, -160) },
+
+      // Citadel Fortress & Helipad
+      { id: 'l10', type: 'sniper' as const, name: 'AWM Sniper Rifle', hex: 0xec4899, pos: new THREE.Vector3(60, 12.6, -280) },
+      { id: 'l11', type: 'shield' as const, name: 'Shield Potion (+50)', hex: 0x06b6d4, pos: new THREE.Vector3(36, 0, -270) },
+      { id: 'l12', type: 'medkit' as const, name: 'Medkit (+50 HP)', hex: 0x22c55e, pos: new THREE.Vector3(84, 0, -270) },
+
+      // Cargo Port Container Yard
+      { id: 'l13', type: 'shotgun' as const, name: 'SPAS-12 Shotgun', hex: 0xf59e0b, pos: new THREE.Vector3(280, 0, 70) },
+      { id: 'l14', type: 'shield' as const, name: 'Shield Potion (+50)', hex: 0x06b6d4, pos: new THREE.Vector3(250, 0, 100) },
+      { id: 'l15', type: 'ammo' as const, name: 'Heavy Ammo Pack', hex: 0xf59e0b, pos: new THREE.Vector3(300, 0, 50) },
+
+      // Radio Relay Peak
+      { id: 'l16', type: 'sniper' as const, name: 'AWM Sniper Rifle', hex: 0xec4899, pos: new THREE.Vector3(240, 2.2, -224) },
+      { id: 'l17', type: 'shield' as const, name: 'Shield Potion (+50)', hex: 0x06b6d4, pos: new THREE.Vector3(264, 0, -236) },
+
+      // Lumber Camp & Forest Outpost
+      { id: 'l18', type: 'rifle' as const, name: 'M4A1 Assault Rifle', hex: 0x3b82f6, pos: new THREE.Vector3(-230, 0, 230) },
+      { id: 'l19', type: 'medkit' as const, name: 'Medkit (+50 HP)', hex: 0x22c55e, pos: new THREE.Vector3(-260, 0, 260) },
+
+      // River Bridge
+      { id: 'l20', type: 'ammo' as const, name: 'Heavy Ammo Pack', hex: 0xf59e0b, pos: new THREE.Vector3(-100, 0.4, 0) }
     ];
     lootSpawnPoints.forEach((lp) => createLootPickup(lp.id, lp.type, lp.name, lp.hex, lp.pos));
 
@@ -873,50 +643,38 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
     const camoSpecOpsTex = TextureGenerator.createCamoTexture('specops');
 
     const camoMaterials = [
-      new THREE.MeshStandardMaterial({ map: camoWoodlandTex, roughness: 0.7 }),
-      new THREE.MeshStandardMaterial({ map: camoUrbanTex, roughness: 0.7 }),
-      new THREE.MeshStandardMaterial({ map: camoDesertTex, roughness: 0.7 }),
-      new THREE.MeshStandardMaterial({ map: camoSpecOpsTex, roughness: 0.7 })
+      new THREE.MeshLambertMaterial({ map: camoWoodlandTex,  }),
+      new THREE.MeshLambertMaterial({ map: camoUrbanTex,  }),
+      new THREE.MeshLambertMaterial({ map: camoDesertTex,  }),
+      new THREE.MeshLambertMaterial({ map: camoSpecOpsTex,  })
     ];
 
     // Shared military gear materials
-    const tacticalArmorVestMat = new THREE.MeshStandardMaterial({ color: 0x090d16, roughness: 0.5, metalness: 0.3 });
-    const tacticalHelmetMat = new THREE.MeshStandardMaterial({ color: 0x181e29, roughness: 0.4, metalness: 0.4 });
-    const tacticalBootMat = new THREE.MeshStandardMaterial({ color: 0x05070a, roughness: 0.8 });
-    const tacticalGunMat = new THREE.MeshStandardMaterial({ color: 0x1c2128, roughness: 0.3, metalness: 0.8 });
+    const tacticalArmorVestMat = new THREE.MeshLambertMaterial({ color: 0x090d16,  });
+    const tacticalHelmetMat = new THREE.MeshLambertMaterial({ color: 0x181e29,  });
+    const tacticalBootMat = new THREE.MeshLambertMaterial({ color: 0x05070a,  });
+    const tacticalGunMat = new THREE.MeshLambertMaterial({ color: 0x1c2128,  });
     const skinMat = new THREE.MeshLambertMaterial({ color: 0xcca076 });
     const visorCyanMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
-    const pouchMat = new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.8 });
-    const backpackMat = new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.85 });
+    const pouchMat = new THREE.MeshLambertMaterial({ color: 0x1f2937,  });
+    const backpackMat = new THREE.MeshLambertMaterial({ color: 0x111827,  });
 
     // 8. HEAVY TACTICAL HUMANOID SOLDIER BOTS (Thick Armor, Modular Helmet, Backpack, and Assault Rifle)
-    const createHumanoidSoldier = (
-      id: string,
-      name: string,
-      x: number,
-      z: number,
-      waypoints: THREE.Vector3[]
-    ): HumanoidEnemy => {
-      const botGroup = new THREE.Group();
-      botGroup.position.set(x, getTerrainHeight(x, z), z);
-
-      // Cycle camo uniforms across bots
-      const botNum = parseInt(id.replace(/\D/g, '') || '0', 10);
-      const uniformMat = camoMaterials[botNum % camoMaterials.length];
-
+    
+    const buildSoldierMesh = (targetGroup: THREE.Group, uniformMat: THREE.Material) => {
       // 1. Torso: Heavy Camo Fatigues BDU
       const torsoGeo = new THREE.BoxGeometry(0.62, 0.78, 0.36);
       const torso = new THREE.Mesh(torsoGeo, uniformMat);
       torso.position.y = 1.18;
       torso.castShadow = true;
-      botGroup.add(torso);
+      targetGroup.add(torso);
 
       // 2. Thick Tactical Plate Carrier Vest (Heavy ceramic front/back plates)
       const vestGeo = new THREE.BoxGeometry(0.68, 0.60, 0.42);
       const vest = new THREE.Mesh(vestGeo, tacticalArmorVestMat);
       vest.position.y = 1.22;
       vest.castShadow = true;
-      botGroup.add(vest);
+      targetGroup.add(vest);
 
       // Triple MOLLE Ammo Pouches on chest
       for (let p = -1; p <= 1; p++) {
@@ -924,69 +682,69 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
         const pouch = new THREE.Mesh(pouchGeo, pouchMat);
         pouch.position.set(p * 0.17, 1.16, 0.24);
         pouch.castShadow = true;
-        botGroup.add(pouch);
+        targetGroup.add(pouch);
       }
 
       // Tactical Radio Communicator on shoulder with antenna
       const radioGeo = new THREE.BoxGeometry(0.10, 0.15, 0.08);
       const radio = new THREE.Mesh(radioGeo, tacticalArmorVestMat);
       radio.position.set(-0.24, 1.42, 0.16);
-      botGroup.add(radio);
+      targetGroup.add(radio);
 
       const antennaGeo = new THREE.CylinderGeometry(0.008, 0.008, 0.28, 4);
       const antenna = new THREE.Mesh(antennaGeo, tacticalGunMat);
       antenna.position.set(-0.24, 1.58, 0.16);
-      botGroup.add(antenna);
+      targetGroup.add(antenna);
 
       // Heavy Military Tactical Backpack / Rucksack on back
       const packGeo = new THREE.BoxGeometry(0.50, 0.54, 0.32);
       const backpack = new THREE.Mesh(packGeo, backpackMat);
       backpack.position.set(0, 1.22, -0.32);
       backpack.castShadow = true;
-      botGroup.add(backpack);
+      targetGroup.add(backpack);
 
       // Bedroll cylinder on top of backpack
       const rollGeo = new THREE.CylinderGeometry(0.10, 0.10, 0.48, 8);
       rollGeo.rotateZ(Math.PI / 2);
       const bedroll = new THREE.Mesh(rollGeo, pouchMat);
       bedroll.position.set(0, 1.52, -0.32);
-      botGroup.add(bedroll);
+      targetGroup.add(bedroll);
 
       // 3. Head & FAST Ballistic Helmet
       const headGeo = new THREE.SphereGeometry(0.20, 12, 12);
       const head = new THREE.Mesh(headGeo, skinMat);
       head.position.y = 1.74;
       head.castShadow = true;
-      botGroup.add(head);
+      targetGroup.add(head);
 
       // Ballistic Combat Helmet Shell
       const helmetGeo = new THREE.SphereGeometry(0.24, 14, 14, 0, Math.PI * 2, 0, Math.PI * 0.68);
       const helmet = new THREE.Mesh(helmetGeo, tacticalHelmetMat);
       helmet.position.set(0, 1.78, 0);
       helmet.castShadow = true;
-      botGroup.add(helmet);
+      targetGroup.add(helmet);
 
       // Helmet Ear-Guards / Comms Ear-cups
       const earGeo = new THREE.BoxGeometry(0.08, 0.12, 0.10);
       const leftEar = new THREE.Mesh(earGeo, tacticalArmorVestMat);
       leftEar.position.set(-0.22, 1.74, 0);
-      botGroup.add(leftEar);
+      targetGroup.add(leftEar);
 
       const rightEar = new THREE.Mesh(earGeo, tacticalArmorVestMat);
       rightEar.position.set(0.22, 1.74, 0);
-      botGroup.add(rightEar);
+      targetGroup.add(rightEar);
 
       // Glowing Tactical Visor / Ballistic Goggles
       const visorGeo = new THREE.BoxGeometry(0.26, 0.08, 0.14);
       const visor = new THREE.Mesh(visorGeo, visorCyanMat);
       visor.position.set(0, 1.75, 0.19);
-      botGroup.add(visor);
+      targetGroup.add(visor);
 
       // NVG Forehead Mount Bracket
       const nvgMountGeo = new THREE.BoxGeometry(0.08, 0.07, 0.06);
       const nvgMount = new THREE.Mesh(nvgMountGeo, tacticalGunMat);
       nvgMount.position.set(0, 1.86, 0.20);
-      botGroup.add(nvgMount);
+      targetGroup.add(nvgMount);
 
       // 4. Arms & Thick Tactical Shoulder Pauldrons
       const armGeo = new THREE.CylinderGeometry(0.11, 0.10, 0.68, 8);
@@ -995,45 +753,45 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
       leftArm.position.set(-0.40, 1.25, 0.15);
       leftArm.rotation.x = Math.PI / 4;
       leftArm.castShadow = true;
-      botGroup.add(leftArm);
+      targetGroup.add(leftArm);
 
       const rightArm = new THREE.Mesh(armGeo, uniformMat);
       rightArm.position.set(0.40, 1.25, 0.15);
       rightArm.rotation.x = Math.PI / 4;
       rightArm.castShadow = true;
-      botGroup.add(rightArm);
+      targetGroup.add(rightArm);
 
       // Thick Ballistic Shoulder Armor Plates (Left & Right Pauldrons)
       const pauldronGeo = new THREE.BoxGeometry(0.24, 0.20, 0.24);
       const leftPauldron = new THREE.Mesh(pauldronGeo, tacticalArmorVestMat);
       leftPauldron.position.set(-0.42, 1.44, 0.02);
       leftPauldron.castShadow = true;
-      botGroup.add(leftPauldron);
+      targetGroup.add(leftPauldron);
 
       const rightPauldron = new THREE.Mesh(pauldronGeo, tacticalArmorVestMat);
       rightPauldron.position.set(0.42, 1.44, 0.02);
       rightPauldron.castShadow = true;
-      botGroup.add(rightPauldron);
+      targetGroup.add(rightPauldron);
 
       // Ballistic Elbow Armor Pads
       const elbowGeo = new THREE.CylinderGeometry(0.12, 0.12, 0.12, 6);
       const lElbow = new THREE.Mesh(elbowGeo, tacticalArmorVestMat);
       lElbow.position.set(-0.40, 1.18, 0.15);
-      botGroup.add(lElbow);
+      targetGroup.add(lElbow);
 
       const rElbow = new THREE.Mesh(elbowGeo, tacticalArmorVestMat);
       rElbow.position.set(0.40, 1.18, 0.15);
-      botGroup.add(rElbow);
+      targetGroup.add(rElbow);
 
       // Tactical Gloves Gripping the Weapon
       const gloveGeo = new THREE.BoxGeometry(0.15, 0.15, 0.16);
       const lGlove = new THREE.Mesh(gloveGeo, tacticalArmorVestMat);
       lGlove.position.set(-0.28, 1.05, 0.40);
-      botGroup.add(lGlove);
+      targetGroup.add(lGlove);
 
       const rGlove = new THREE.Mesh(gloveGeo, tacticalArmorVestMat);
       rGlove.position.set(0.25, 1.08, 0.38);
-      botGroup.add(rGlove);
+      targetGroup.add(rGlove);
 
       // 5. Heavy Combat Rifle Model Held in Hands
       const rifleGroup = new THREE.Group();
@@ -1082,53 +840,72 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
       rLens.position.set(0, 0.10, -0.02);
       rifleGroup.add(rLens);
 
-      botGroup.add(rifleGroup);
+      targetGroup.add(rifleGroup);
 
       // 6. Legs & Reinforced Knee Armor Guards
       const legGeo = new THREE.CylinderGeometry(0.14, 0.13, 0.75, 8);
       const leftLeg = new THREE.Mesh(legGeo, uniformMat);
       leftLeg.position.set(-0.20, 0.45, 0);
       leftLeg.castShadow = true;
-      botGroup.add(leftLeg);
+      targetGroup.add(leftLeg);
 
       const rightLeg = new THREE.Mesh(legGeo, uniformMat);
       rightLeg.position.set(0.20, 0.45, 0);
       rightLeg.castShadow = true;
-      botGroup.add(rightLeg);
+      targetGroup.add(rightLeg);
 
       // Heavy Ballistic Knee Armor Plates
       const kneeGeo = new THREE.BoxGeometry(0.22, 0.18, 0.14);
       const lKnee = new THREE.Mesh(kneeGeo, tacticalArmorVestMat);
       lKnee.position.set(-0.20, 0.42, 0.10);
-      botGroup.add(lKnee);
+      targetGroup.add(lKnee);
 
       const rKnee = new THREE.Mesh(kneeGeo, tacticalArmorVestMat);
       rKnee.position.set(0.20, 0.42, 0.10);
-      botGroup.add(rKnee);
+      targetGroup.add(rKnee);
 
       // Tactical Drop-Leg Pistol Holster on right thigh
       const holsterGeo = new THREE.BoxGeometry(0.12, 0.20, 0.14);
       const holster = new THREE.Mesh(holsterGeo, tacticalArmorVestMat);
       holster.position.set(0.32, 0.52, 0.02);
-      botGroup.add(holster);
+      targetGroup.add(holster);
 
       // Utility Canteen Pouch on left hip
       const canteenGeo = new THREE.BoxGeometry(0.14, 0.16, 0.12);
       const canteen = new THREE.Mesh(canteenGeo, pouchMat);
       canteen.position.set(-0.32, 0.78, 0.02);
-      botGroup.add(canteen);
+      targetGroup.add(canteen);
 
       // 7. Thick Military Combat Assault Boots
       const bootGeo = new THREE.BoxGeometry(0.24, 0.22, 0.34);
       const lBoot = new THREE.Mesh(bootGeo, tacticalBootMat);
       lBoot.position.set(-0.20, 0.11, 0.06);
       lBoot.castShadow = true;
-      botGroup.add(lBoot);
+      targetGroup.add(lBoot);
 
       const rBoot = new THREE.Mesh(bootGeo, tacticalBootMat);
       rBoot.position.set(0.20, 0.11, 0.06);
       rBoot.castShadow = true;
-      botGroup.add(rBoot);
+      targetGroup.add(rBoot);
+
+      
+      return { torso, head, leftLeg, rightLeg, leftArm, rightArm };
+    };
+  const createHumanoidSoldier = (
+      id: string,
+      name: string,
+      x: number,
+      z: number,
+      waypoints: THREE.Vector3[]
+    ): HumanoidEnemy => {
+      const botGroup = new THREE.Group();
+      botGroup.position.set(x, getTerrainHeight(x, z), z);
+
+      // Cycle camo uniforms across bots
+      const botNum = parseInt(id.replace(/\D/g, '') || '0', 10);
+      const uniformMat = camoMaterials[botNum % camoMaterials.length];
+
+      const { torso, head, leftLeg, rightLeg, leftArm, rightArm } = buildSoldierMesh(botGroup, uniformMat);
 
       // 8. Sleek High-Resolution Overhead Health/Shield Billboard in English
       const healthCanvas = document.createElement('canvas');
@@ -1202,23 +979,49 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
       };
     };
 
-    // Spawn 14 Combat Bots across the map (Positioned safely away from player drop zone at 0, 20)
+    // Spawn Combat Bots across the POIs on the expanded 1000m map
     const bots: HumanoidEnemy[] = [];
-    const botRosterConfig = [
-      { id: 'b1', name: 'Bot_Ghost', x: 55, z: -45, wps: [new THREE.Vector3(55, 0, -45), new THREE.Vector3(75, 0, -45), new THREE.Vector3(65, 0, -30)] },
-      { id: 'b2', name: 'Bot_Viper', x: 42, z: -25, wps: [new THREE.Vector3(42, 0, -25), new THREE.Vector3(50, 0, -15), new THREE.Vector3(35, 0, -25)] },
-      { id: 'b3', name: 'Bot_Recon', x: -50, z: 50, wps: [new THREE.Vector3(-50, 0, 50), new THREE.Vector3(-70, 0, 50), new THREE.Vector3(-60, 0, 65)] },
-      { id: 'b4', name: 'Bot_Titan', x: -40, z: 35, wps: [new THREE.Vector3(-40, 0, 35), new THREE.Vector3(-55, 0, 35), new THREE.Vector3(-45, 0, 45)] },
-      { id: 'b5', name: 'Bot_Apex', x: 38, z: 48, wps: [new THREE.Vector3(38, 0, 48), new THREE.Vector3(48, 0, 38), new THREE.Vector3(35, 0, 58)] },
-      { id: 'b6', name: 'Bot_Raven', x: -30, z: -25, wps: [new THREE.Vector3(-30, 0, -25), new THREE.Vector3(-20, 0, -35), new THREE.Vector3(-40, 0, -25)] },
-      { id: 'b7', name: 'Bot_Cobra', x: 80, z: 45, wps: [new THREE.Vector3(80, 0, 45), new THREE.Vector3(70, 0, 60), new THREE.Vector3(60, 0, 35)] },
-      { id: 'b8', name: 'Bot_Echo', x: -75, z: -55, wps: [new THREE.Vector3(-75, 0, -55), new THREE.Vector3(-60, 0, -45), new THREE.Vector3(-80, 0, -35)] },
-      { id: 'b9', name: 'Bot_Shadow', x: 30, z: -75, wps: [new THREE.Vector3(30, 0, -75), new THREE.Vector3(15, 0, -65), new THREE.Vector3(45, 0, -60)] },
-      { id: 'b10', name: 'Bot_Hunter', x: -25, z: 75, wps: [new THREE.Vector3(-25, 0, 75), new THREE.Vector3(-10, 0, 65), new THREE.Vector3(-40, 0, 70)] },
-      { id: 'b11', name: 'Bot_Slayer', x: -65, z: 5, wps: [new THREE.Vector3(-65, 0, 5), new THREE.Vector3(-55, 0, -10), new THREE.Vector3(-75, 0, 15)] },
-      { id: 'b12', name: 'Bot_Strike', x: 65, z: 5, wps: [new THREE.Vector3(65, 0, 5), new THREE.Vector3(75, 0, 15), new THREE.Vector3(55, 0, -10)] },
-      { id: 'b13', name: 'Bot_Blaze', x: 18, z: -48, wps: [new THREE.Vector3(18, 0, -48), new THREE.Vector3(28, 0, -58), new THREE.Vector3(8, 0, -42)] },
-      { id: 'b14', name: 'Bot_Frost', x: -38, z: -20, wps: [new THREE.Vector3(-38, 0, -20), new THREE.Vector3(-28, 0, -30), new THREE.Vector3(-48, 0, -15)] }
+    
+    // Add real player model to the drop dummy
+    const playerCamoMat = camoMaterials[3]; // SpecOps camo for player
+    const dummyParts = buildSoldierMesh(playerDropDummy, playerCamoMat);
+    // Center the dummy relative to the camera
+    playerDropDummy.position.y = -1.2;
+    
+const botRosterConfig = [
+      // Central Plaza & Depot
+      { id: 'b1', name: 'Ghost_Ops', x: 25, z: 20, wps: [new THREE.Vector3(25, 0, 20), new THREE.Vector3(35, 0, 10), new THREE.Vector3(15, 0, 30)] },
+      { id: 'b2', name: 'Viper_Nine', x: -22, z: -15, wps: [new THREE.Vector3(-22, 0, -15), new THREE.Vector3(-30, 0, -25), new THREE.Vector3(-15, 0, -10)] },
+      { id: 'b3', name: 'Recon_Alpha', x: 0, z: -35, wps: [new THREE.Vector3(0, 0, -35), new THREE.Vector3(15, 0, -25), new THREE.Vector3(-15, 0, -30)] },
+
+      // Airfield & Hangars (West)
+      { id: 'b4', name: 'Titan_Heavy', x: -280, z: -40, wps: [new THREE.Vector3(-280, 0, -40), new THREE.Vector3(-320, 0, -20), new THREE.Vector3(-240, 0, -60)] },
+      { id: 'b5', name: 'Apex_Pilot', x: -320, z: 30, wps: [new THREE.Vector3(-320, 0, 30), new THREE.Vector3(-280, 0, 70), new THREE.Vector3(-340, 0, 0)] },
+      { id: 'b6', name: 'Raven_Air', x: -250, z: -120, wps: [new THREE.Vector3(-250, 0, -120), new THREE.Vector3(-290, 0, -150), new THREE.Vector3(-220, 0, -100)] },
+
+      // Citadel Fortress & Helipad (North)
+      { id: 'b7', name: 'Cobra_Guard', x: 0, z: -280, wps: [new THREE.Vector3(0, 0, -280), new THREE.Vector3(40, 0, -300), new THREE.Vector3(-40, 0, -270)] },
+      { id: 'b8', name: 'Echo_Sniper', x: 90, z: -310, wps: [new THREE.Vector3(90, 0, -310), new THREE.Vector3(60, 0, -280), new THREE.Vector3(110, 0, -330)] },
+      { id: 'b9', name: 'Shadow_Fort', x: -80, z: -290, wps: [new THREE.Vector3(-80, 0, -290), new THREE.Vector3(-50, 0, -320), new THREE.Vector3(-100, 0, -260)] },
+
+      // Cargo Port & Container Yard (East)
+      { id: 'b10', name: 'Hunter_Dock', x: 270, z: 70, wps: [new THREE.Vector3(270, 0, 70), new THREE.Vector3(300, 0, 40), new THREE.Vector3(240, 0, 100)] },
+      { id: 'b11', name: 'Slayer_Cargo', x: 310, z: -30, wps: [new THREE.Vector3(310, 0, -30), new THREE.Vector3(340, 0, 0), new THREE.Vector3(280, 0, -60)] },
+      { id: 'b12', name: 'Strike_Crane', x: 250, z: 140, wps: [new THREE.Vector3(250, 0, 140), new THREE.Vector3(280, 0, 170), new THREE.Vector3(230, 0, 110)] },
+
+      // Radio Relay Peak (North-East Mountains)
+      { id: 'b13', name: 'Blaze_Relay', x: 230, z: -210, wps: [new THREE.Vector3(230, 0, -210), new THREE.Vector3(260, 0, -240), new THREE.Vector3(200, 0, -190)] },
+      { id: 'b14', name: 'Frost_Scout', x: 280, z: -170, wps: [new THREE.Vector3(280, 0, -170), new THREE.Vector3(310, 0, -200), new THREE.Vector3(250, 0, -150)] },
+
+      // Lumber Camp & Forest Outpost (South-West)
+      { id: 'b15', name: 'Timber_Axe', x: -230, z: 240, wps: [new THREE.Vector3(-230, 0, 240), new THREE.Vector3(-270, 0, 270), new THREE.Vector3(-200, 0, 210)] },
+      { id: 'b16', name: 'Sawmill_Wolf', x: -280, z: 200, wps: [new THREE.Vector3(-280, 0, 200), new THREE.Vector3(-310, 0, 230), new THREE.Vector3(-250, 0, 170)] },
+      { id: 'b17', name: 'Pine_Tracker', x: -180, z: 280, wps: [new THREE.Vector3(-180, 0, 280), new THREE.Vector3(-210, 0, 310), new THREE.Vector3(-150, 0, 250)] },
+
+      // River Canal & Bridges (Midlands)
+      { id: 'b18', name: 'Canal_Sniper', x: -100, z: 20, wps: [new THREE.Vector3(-100, 0, 20), new THREE.Vector3(-70, 0, 40), new THREE.Vector3(-130, 0, 10)] },
+      { id: 'b19', name: 'Bridge_Sentry', x: 100, z: 20, wps: [new THREE.Vector3(100, 0, 20), new THREE.Vector3(130, 0, 40), new THREE.Vector3(70, 0, 10)] },
+      { id: 'b20', name: 'Delta_Ranger', x: 10, z: 130, wps: [new THREE.Vector3(10, 0, 130), new THREE.Vector3(40, 0, 160), new THREE.Vector3(-20, 0, 110)] }
     ];
     botRosterConfig.forEach((cfg) => {
       bots.push(createHumanoidSoldier(cfg.id, cfg.name, cfg.x, cfg.z, cfg.wps));
@@ -1233,12 +1036,12 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
     // Rifle Model
     const rifleMeshGroup = new THREE.Group();
     const rBodyGeo = new THREE.BoxGeometry(0.06, 0.12, 0.65);
-    const rBodyMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.4, metalness: 0.6 });
+    const rBodyMat = new THREE.MeshLambertMaterial({ color: 0x1e293b,  });
     const rBody = new THREE.Mesh(rBodyGeo, rBodyMat);
     rifleMeshGroup.add(rBody);
 
     const rBarrelGeo = new THREE.CylinderGeometry(0.018, 0.018, 0.35, 8);
-    const rBarrelMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.3, metalness: 0.8 });
+    const rBarrelMat = new THREE.MeshLambertMaterial({ color: 0x0f172a,  });
     const rBarrel = new THREE.Mesh(rBarrelGeo, rBarrelMat);
     rBarrel.rotation.x = Math.PI / 2;
     rBarrel.position.set(0, 0.02, -0.42);
@@ -1246,7 +1049,7 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
 
     // Magazine
     const rMagGeo = new THREE.BoxGeometry(0.045, 0.2, 0.1);
-    const rMagMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.5 });
+    const rMagMat = new THREE.MeshLambertMaterial({ color: 0x334155,  });
     const rMag = new THREE.Mesh(rMagGeo, rMagMat);
     rMag.position.set(0, -0.12, -0.05);
     rifleMeshGroup.add(rMag);
@@ -1272,7 +1075,22 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
     let targetYaw = 0;
     let targetPitch = 0;
     let verticalVelocity = 0;
-    let isGrounded = true;
+    let isGrounded = false;
+
+    // Reset keys on window blur to prevent continuous rotation / movement
+    const onWindowBlur = () => {
+      for (const k in keys) keys[k] = false;
+      const vInput = virtualInputRef.current;
+      vInput.lookLeft = false;
+      vInput.lookRight = false;
+      vInput.lookUp = false;
+      vInput.lookDown = false;
+      vInput.forward = false;
+      vInput.backward = false;
+      vInput.left = false;
+      vInput.right = false;
+    };
+    window.addEventListener('blur', onWindowBlur);
 
     const onKeyDown = (e: KeyboardEvent) => {
       // Prevent browser accidental back navigation
@@ -1518,8 +1336,81 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
               eliminateBot(hitBot, w.name);
             }
           } else {
-            // Hit scenery or terrain
-            spawnImpactSparks(hit.point, hit.face ? hit.face.normal : new THREE.Vector3(0, 1, 0), 0xfef08a);
+            // Check if bullet hit an explosive barrel
+            let hitBarrel: typeof interactiveBarrels[0] | undefined;
+            for (const barrel of interactiveBarrels) {
+              if (barrel.exploded) continue;
+              if (barrel.mesh === hit.object || barrel.mesh.children.some((c) => c === hit.object)) {
+                hitBarrel = barrel;
+                break;
+              }
+            }
+
+            if (hitBarrel) {
+              hasHitAny = true;
+              const dmg = w.type === 'shotgun' ? w.damage / 8 : w.damage;
+              hitBarrel.health -= dmg;
+              spawnImpactSparks(hit.point, hit.face ? hit.face.normal : new THREE.Vector3(0, 1, 0), 0xf97316);
+
+              if (hitBarrel.health <= 0 && !hitBarrel.exploded) {
+                hitBarrel.exploded = true;
+                hitBarrel.mesh.visible = false;
+                sounds.playEnemyHit();
+
+                const bx = hitBarrel.position.x;
+                const by = hitBarrel.position.y;
+                const bz = hitBarrel.position.z;
+
+                // Multi-tier fiery explosion burst
+                for (let ex = 0; ex < 4; ex++) {
+                  spawnImpactSparks(
+                    new THREE.Vector3(bx, by + 0.4 + ex * 0.3, bz),
+                    new THREE.Vector3(0, 1, 0),
+                    0xf97316
+                  );
+                }
+
+                // Blast area damage to bots
+                livingBots.forEach((bot) => {
+                  const bDist = bot.mesh.position.distanceTo(new THREE.Vector3(bx, by, bz));
+                  if (bDist <= 9.0) {
+                    const blastDmg = Math.round(120 * (1 - bDist / 9.0));
+                    bot.health -= blastDmg;
+                    renderBotHealth(bot);
+                    if (bot.health <= 0) {
+                      eliminateBot(bot, 'Explosive Barrel');
+                    }
+                  }
+                });
+
+                // Blast area damage to player if within radius
+                const pDist = camera.position.distanceTo(new THREE.Vector3(bx, by, bz));
+                if (pDist <= 9.0) {
+                  const pDmg = Math.round(80 * (1 - pDist / 9.0));
+                  if (stateRef.current.playerShield > 0) {
+                    stateRef.current.playerShield -= pDmg;
+                    sounds.playShieldHit();
+                    if (stateRef.current.playerShield < 0) {
+                      stateRef.current.playerHealth += stateRef.current.playerShield;
+                      stateRef.current.playerShield = 0;
+                    }
+                  } else {
+                    stateRef.current.playerHealth -= pDmg;
+                    sounds.playPlayerHurt();
+                  }
+                  setPlayerHealth(Math.max(0, Math.ceil(stateRef.current.playerHealth)));
+                  setPlayerShield(Math.max(0, Math.ceil(stateRef.current.playerShield)));
+                  setIsDamagedVignette(true);
+                  setTimeout(() => setIsDamagedVignette(false), 200);
+                  if (stateRef.current.playerHealth <= 0 && !stateRef.current.isGameOver) {
+                    triggerGameOver('Explosive Barrel');
+                  }
+                }
+              }
+            } else {
+              // Hit scenery or terrain
+              spawnImpactSparks(hit.point, hit.face ? hit.face.normal : new THREE.Vector3(0, 1, 0), 0xfef08a);
+            }
           }
         }
 
@@ -1709,7 +1600,14 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
       // Clean up bullet tracers
       for (let i = tracers.length - 1; i >= 0; i--) {
         if (now - tracers[i].startTime > tracers[i].duration) {
-          scene.remove(tracers[i].line);
+          const tracer = tracers[i];
+          scene.remove(tracer.line);
+          tracer.line.geometry.dispose();
+          if (Array.isArray(tracer.line.material)) {
+            tracer.line.material.forEach(m => m.dispose());
+          } else {
+            tracer.line.material.dispose();
+          }
           tracers.splice(i, 1);
         }
       }
@@ -1720,6 +1618,12 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
         const elapsed = now - spark.startTime;
         if (elapsed > spark.duration) {
           scene.remove(spark.mesh);
+          spark.mesh.geometry.dispose();
+          if (Array.isArray(spark.mesh.material)) {
+            spark.mesh.material.forEach(m => m.dispose());
+          } else {
+            spark.mesh.material.dispose();
+          }
           impactSparks.splice(i, 1);
         } else {
           const pos = spark.mesh.geometry.attributes.position;
@@ -1775,8 +1679,7 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
 
       // 1. PLAYER MOVEMENT & SMOOTH VELOCITY
       const isSprinting = keys['ShiftLeft'] || keys['ShiftRight'] || vInput.sprint;
-      const targetSpeed = isSprinting ? stateRef.current.settings.sprintSpeed : stateRef.current.settings.walkSpeed;
-
+      
       const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
       const right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
       const inputDir = new THREE.Vector3();
@@ -1793,58 +1696,221 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
         inputDir.add(right.clone().multiplyScalar(joy.x));
       }
 
-      if (inputDir.lengthSq() > 0.01) {
-        inputDir.normalize().multiplyScalar(targetSpeed);
-      }
-
-      // Smooth velocity interpolation (acceleration & damping)
-      stateRef.current.playerVelocity.lerp(inputDir, delta * 12);
-      camera.position.add(stateRef.current.playerVelocity.clone().multiplyScalar(delta));
-      stateRef.current.playerPosition.copy(camera.position);
-
-      // Weapon Bobbing
-      if (stateRef.current.playerVelocity.lengthSq() > 0.5) {
-        const bobSpeed = isSprinting ? 14 : 9;
-        const bobAmount = isSprinting ? 0.03 : 0.015;
-        weaponHolder.position.y = -0.22 + Math.sin(now * 0.001 * bobSpeed) * bobAmount;
-        weaponHolder.position.x = 0.26 + Math.cos(now * 0.001 * (bobSpeed / 2)) * (bobAmount * 0.6);
-      } else {
-        weaponHolder.position.set(0.26, -0.22, -0.45);
-      }
-
-      // Jump & Gravity with strict terrain height clamping (prevents player sinking into ground)
       const currentGroundY = getTerrainHeight(camera.position.x, camera.position.z);
       const eyeHeight = 1.85;
       const minCameraY = currentGroundY + eyeHeight;
 
-      if (isGrounded) {
-        if (keys['Space'] || vInput.jump) {
-          verticalVelocity = Math.sqrt(2 * stateRef.current.settings.jumpHeight * stateRef.current.settings.gravity);
-          isGrounded = false;
-          vInput.jump = false;
-          sounds.playJump();
-        } else {
-          // Firmly clamp camera to eye height on ground surface
-          camera.position.y = minCameraY;
-          verticalVelocity = 0;
+      // PUBG-Style Drop Phases
+      if (stateRef.current.dropPhase === 'in_plane') {
+        // Move airplane
+        planeZ += delta * 150;
+        airplaneGroup.position.set(0, 450, planeZ);
+        
+        // Attach player to plane
+        camera.position.set(0, 445, planeZ - 10);
+        verticalVelocity = 0;
+        isGrounded = false;
+        parachuteGroup.visible = false;
+        
+        // Auto-eject if plane reaches map edge
+        if (planeZ > 550) {
+          stateRef.current.dropPhase = 'freefall';
+          setDropPhase('freefall');
         }
-      } else {
+      } else if (stateRef.current.dropPhase === 'freefall' || stateRef.current.dropPhase === 'parachute') {
+        // Continue plane movement independently
+        if (airplaneGroup.visible) {
+          planeZ += delta * 150;
+          airplaneGroup.position.set(0, 450, planeZ);
+          if (planeZ > 800) airplaneGroup.visible = false;
+        }
+
+        // Gliding horizontal movement
+        const glideSpeed = stateRef.current.dropPhase === 'freefall' ? 45 : 20;
+        if (inputDir.lengthSq() > 0.01) {
+          inputDir.normalize().multiplyScalar(glideSpeed);
+        }
+        stateRef.current.playerVelocity.lerp(inputDir, delta * (stateRef.current.dropPhase === 'freefall' ? 2 : 1));
+        camera.position.add(stateRef.current.playerVelocity.clone().multiplyScalar(delta));
+        
+        // Gravity
         verticalVelocity -= stateRef.current.settings.gravity * delta;
+        
+        if (stateRef.current.dropPhase === 'freefall') {
+          // Freefall terminal velocity
+          if (verticalVelocity < -55) verticalVelocity = -55;
+          
+          // Manual deploy via jump button or auto-deploy at 100m
+          if (camera.position.y < currentGroundY + 100 || keys['Space'] || vInput.jump) {
+            stateRef.current.dropPhase = 'parachute';
+            setDropPhase('parachute');
+            parachuteGroup.scale.set(0.1, 0.1, 0.1);
+            sounds.playJump();
+          }
+        } else {
+          // Parachute terminal velocity
+          if (verticalVelocity < -12) {
+            verticalVelocity = THREE.MathUtils.lerp(verticalVelocity, -12, delta * 4);
+          }
+          
+          // Render Parachute
+          if (!parachuteGroup.visible) {
+             parachuteGroup.scale.set(0.1, 0.1, 0.1);
+             sounds.playJump();
+          }
+          parachuteGroup.visible = true;
+          
+          // Animate opening scale
+          if (parachuteGroup.scale.x < 1) {
+             parachuteGroup.scale.addScalar(delta * 2);
+             if (parachuteGroup.scale.x > 1) parachuteGroup.scale.set(1, 1, 1);
+          }
+          
+          parachuteGroup.position.copy(camera.position);
+          parachuteGroup.rotation.y = yaw;
+          parachuteGroup.rotation.z = Math.sin(now * 0.002) * 0.1;
+          parachuteGroup.rotation.x = Math.cos(now * 0.0015) * 0.1;
+        }
+        
         camera.position.y += verticalVelocity * delta;
 
+        // Land
         if (camera.position.y <= minCameraY) {
           camera.position.y = minCameraY;
           verticalVelocity = 0;
           isGrounded = true;
+          stateRef.current.dropPhase = 'landed';
+          setDropPhase('landed');
+          parachuteGroup.visible = false;
+          sounds.playJump();
+        }
+      } else {
+        // NORMAL LANDED MOVEMENT
+        const targetSpeed = isSprinting ? stateRef.current.settings.sprintSpeed : stateRef.current.settings.walkSpeed;
+        if (inputDir.lengthSq() > 0.01) {
+          inputDir.normalize().multiplyScalar(targetSpeed);
+        }
+        stateRef.current.playerVelocity.lerp(inputDir, delta * 12);
+        camera.position.add(stateRef.current.playerVelocity.clone().multiplyScalar(delta));
+
+        if (isGrounded) {
+          if (keys['Space'] || vInput.jump) {
+            verticalVelocity = Math.sqrt(2 * stateRef.current.settings.jumpHeight * stateRef.current.settings.gravity);
+            isGrounded = false;
+            vInput.jump = false;
+            sounds.playJump();
+          } else {
+            camera.position.y = minCameraY;
+            verticalVelocity = 0;
+          }
+        } else {
+          verticalVelocity -= stateRef.current.settings.gravity * delta;
+          camera.position.y += verticalVelocity * delta;
+          if (camera.position.y <= minCameraY) {
+            camera.position.y = minCameraY;
+            verticalVelocity = 0;
+            isGrounded = true;
+            sounds.playJump();
+          }
+        }
+
+        // Airplane flyover cleanup if still visible
+        if (airplaneGroup.visible) {
+          planeZ += delta * 150;
+          airplaneGroup.position.set(0, 450, planeZ);
+          if (planeZ > 800) airplaneGroup.visible = false;
+        }
+        parachuteGroup.visible = false;
+      }
+      
+      // Robust 3D AABB Collision & Push-out
+      if (stateRef.current.dropPhase !== 'in_plane') {
+        const playerMinY = camera.position.y - 1.85 + 0.1; // eyeHeight = 1.85
+        const playerMaxY = camera.position.y + 0.2;
+        for (const mesh of collidableMeshes) {
+          const box = new THREE.Box3().setFromObject(mesh);
+          const r = 0.4; // player radius
+          
+          if (
+            camera.position.x + r > box.min.x &&
+            camera.position.x - r < box.max.x &&
+            camera.position.z + r > box.min.z &&
+            camera.position.z - r < box.max.z &&
+            playerMinY < box.max.y &&
+            playerMaxY > box.min.y
+          ) {
+            // Find closest face to push out
+            const distLeft = (camera.position.x + r) - box.min.x;
+            const distRight = box.max.x - (camera.position.x - r);
+            const distFront = (camera.position.z + r) - box.min.z;
+            const distBack = box.max.z - (camera.position.z - r);
+            const distTop = box.max.y - playerMinY;
+            
+            const minDist = Math.min(distLeft, distRight, distFront, distBack, distTop);
+            
+            if (minDist === distTop) {
+               camera.position.y = box.max.y + 1.85 - 0.1;
+               verticalVelocity = 0;
+               isGrounded = true;
+               if (stateRef.current.dropPhase !== 'landed') {
+                 stateRef.current.dropPhase = 'landed';
+                 setDropPhase('landed');
+                 parachuteGroup.visible = false;
+               }
+            } else if (minDist === distLeft) {
+               camera.position.x = box.min.x - r;
+            } else if (minDist === distRight) {
+               camera.position.x = box.max.x + r;
+            } else if (minDist === distFront) {
+               camera.position.z = box.min.z - r;
+            } else if (minDist === distBack) {
+               camera.position.z = box.max.z + r;
+            }
+          }
         }
       }
 
-      // Restrict player inside battlefield island boundaries
-      const playerDist = Math.sqrt(camera.position.x * camera.position.x + camera.position.z * camera.position.z);
-      if (playerDist > 125) {
-        camera.position.x = (camera.position.x / playerDist) * 125;
-        camera.position.z = (camera.position.z / playerDist) * 125;
+      stateRef.current.playerPosition.copy(camera.position);
+
+      // Weapon Bobbing (Only when landed)
+      if (stateRef.current.dropPhase === 'landed') {
+        if (stateRef.current.playerVelocity.lengthSq() > 0.5 && isGrounded) {
+          const bobSpeed = isSprinting ? 14 : 9;
+          const bobAmount = isSprinting ? 0.03 : 0.015;
+          weaponHolder.position.y = -0.22 + Math.sin(now * 0.001 * bobSpeed) * bobAmount;
+          weaponHolder.position.x = 0.26 + Math.cos(now * 0.001 * (bobSpeed / 2)) * (bobAmount * 0.6);
+        } else {
+          weaponHolder.position.set(0.26, -0.22, -0.45);
+        }
       }
+
+      // Restrict player inside expanded island perimeter (480m boundary)
+      if (stateRef.current.dropPhase !== 'in_plane') {
+        const playerDist = Math.sqrt(camera.position.x * camera.position.x + camera.position.z * camera.position.z);
+        if (playerDist > 480) {
+          camera.position.x = (camera.position.x / playerDist) * 480;
+          camera.position.z = (camera.position.z / playerDist) * 480;
+        }
+      }
+
+      // Check for Jump Pad Trigger (Tactical Launch Pad boosts player high into the sky)
+      jumpPads.forEach((pad) => {
+        const dx = camera.position.x - pad.position.x;
+        const dz = camera.position.z - pad.position.z;
+        const nowSec = performance.now() / 1000;
+        if (
+          dx * dx + dz * dz < 2.5 * 2.5 &&
+          Math.abs(camera.position.y - (pad.position.y + eyeHeight)) < 2.5 &&
+          nowSec - pad.lastUsedTime > 1.2
+        ) {
+          pad.lastUsedTime = nowSec;
+          verticalVelocity = pad.force;
+          isGrounded = false;
+          sounds.playJump();
+          spawnImpactSparks(new THREE.Vector3(pad.position.x, pad.position.y + 0.3, pad.position.z), new THREE.Vector3(0, 1, 0), 0x06b6d4);
+          setActiveObjectiveTip('🚀 Launch Pad activated! Soar over enemy positions.');
+        }
+      });
 
       // ADS Camera FOV Zoom
       const targetFov = stateRef.current.isAimingDownSights
@@ -1888,16 +1954,16 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
       setStormTimer(Math.max(0, Math.ceil(stormPhaseTime)));
 
       if (isShrinkActive) {
-        const targetRadius = Math.max(18, 130 - currentPhase * 28);
+        const targetRadius = Math.max(30, 480 - currentPhase * 80);
         stateRef.current.stormRadius = THREE.MathUtils.lerp(stateRef.current.stormRadius, targetRadius, delta * 0.15);
-        stormCylinder.scale.set(stateRef.current.stormRadius / 130, 1, stateRef.current.stormRadius / 130);
-        stormRing.scale.set(stateRef.current.stormRadius / 130, 1, stateRef.current.stormRadius / 130);
+        stormCylinder.scale.set(stateRef.current.stormRadius / 480, 1, stateRef.current.stormRadius / 480);
+        stormRing.scale.set(stateRef.current.stormRadius / 480, 1, stateRef.current.stormRadius / 480);
       }
 
       // Distance from center & safe zone check
       const playerDistFromCenter = Math.sqrt(camera.position.x * camera.position.x + camera.position.z * camera.position.z);
       setDistanceToSafeCenter(Math.round(playerDistFromCenter));
-      const isSafe = playerDistFromCenter <= stateRef.current.stormRadius;
+      const isSafe = (playerDistFromCenter <= stateRef.current.stormRadius) || stateRef.current.dropPhase !== 'landed';
       setIsInsideSafeZone(isSafe);
       stateRef.current.isInsideSafeZone = isSafe;
 
@@ -1925,9 +1991,10 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
         const botPos = bot.mesh.position;
         const distToPlayer = botPos.distanceTo(camera.position);
 
-        if (distToPlayer <= stateRef.current.settings.detectionRadius) {
+        const canSeePlayer = stateRef.current.dropPhase === 'landed' && distToPlayer <= stateRef.current.settings.detectionRadius;
+        if (canSeePlayer) {
           bot.state = distToPlayer <= stateRef.current.settings.attackRange ? 'Attack' : 'Chase';
-        } else if (distToPlayer > stateRef.current.settings.detectionRadius * 1.5) {
+        } else if (distToPlayer > stateRef.current.settings.detectionRadius * 1.5 || stateRef.current.dropPhase !== 'landed') {
           bot.state = 'Patrol';
         }
 
@@ -2056,7 +2123,7 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
           const h = radar.height;
           const cx = w / 2;
           const cy = h / 2;
-          const radarScale = 0.55; // 1 world meter = 0.55 radar pixels
+          const radarScale = 0.35; // Calibrated for expanded 480m island
 
           rCtx.clearRect(0, 0, w, h);
 
@@ -2085,6 +2152,37 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
           rCtx.beginPath();
           rCtx.arc(safeCenterX, safeCenterY, stateRef.current.stormRadius * radarScale, 0, Math.PI * 2);
           rCtx.stroke();
+
+          // Draw Major POIs with icons/labels on Radar
+          pois.forEach((poi) => {
+            const px = cx + (poi.x - camera.position.x) * radarScale;
+            const py = cy + (poi.z - camera.position.z) * radarScale;
+            if (px >= 5 && px <= w - 5 && py >= 5 && py <= h - 5) {
+              rCtx.fillStyle = 'rgba(245, 158, 11, 0.9)';
+              rCtx.beginPath();
+              rCtx.arc(px, py, 3.5, 0, Math.PI * 2);
+              rCtx.fill();
+
+              rCtx.fillStyle = '#fef08a';
+              rCtx.font = 'bold 8px sans-serif';
+              rCtx.textAlign = 'center';
+              rCtx.fillText(poi.name.split(' ')[0], px, py - 5);
+            }
+          });
+
+          // Draw Jump Pads (Cyan diamonds)
+          jumpPads.forEach((pad) => {
+            const jx = cx + (pad.position.x - camera.position.x) * radarScale;
+            const jy = cy + (pad.position.z - camera.position.z) * radarScale;
+            rCtx.fillStyle = '#06b6d4';
+            rCtx.beginPath();
+            rCtx.moveTo(jx, jy - 3);
+            rCtx.lineTo(jx + 3, jy);
+            rCtx.lineTo(jx, jy + 3);
+            rCtx.lineTo(jx - 3, jy);
+            rCtx.closePath();
+            rCtx.fill();
+          });
 
           // Draw Loot Crates (Gold/Yellow dots)
           groundLootRoster.forEach((item) => {
@@ -2132,7 +2230,52 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
         }
       }
 
+      // --- SKYDIVE THIRD-PERSON VIEW OVERRIDE ---
+      let isSkydiving = stateRef.current.dropPhase === 'freefall' || stateRef.current.dropPhase === 'parachute';
+      let isInPlane = stateRef.current.dropPhase === 'in_plane';
+      let realCamPos = camera.position.clone();
+      let realCamRot = camera.rotation.clone();
+
+      if (isSkydiving || isInPlane) {
+        weaponHolder.visible = false;
+      } else {
+        weaponHolder.visible = true;
+      }
+
+      if (isSkydiving) {
+        // Sync dummy position and rotate dummy to face the direction we are falling/looking
+        playerDropDummy.visible = true;
+        // The camera is at eye height (approx 1.85). The soldier mesh is built relative to the ground.
+        // Subtract eyeHeight so the model lines up correctly.
+        const modelPos = realCamPos.clone();
+        modelPos.y -= 1.85; 
+        playerDropDummy.position.copy(modelPos);
+        playerDropDummy.rotation.y = yaw;
+        // Pitch dummy down slightly in freefall
+        playerDropDummy.rotation.x = stateRef.current.dropPhase === 'freefall' ? -Math.PI / 4 : 0;
+        
+        // Offset the camera back and slightly up
+        let dropOffset;
+        let lookTarget = realCamPos.clone();
+        if (stateRef.current.dropPhase === 'parachute') {
+           dropOffset = new THREE.Vector3(0, 4, 11).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+           lookTarget.y += 2.5; // Look up a bit to see parachute
+        } else {
+           dropOffset = new THREE.Vector3(0, 2, 6).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+        }
+        camera.position.add(dropOffset);
+        camera.lookAt(lookTarget);
+      } else {
+        playerDropDummy.visible = false;
+      }
+
       renderer.render(scene, camera);
+
+      if (isSkydiving) {
+        // Restore real FPS camera transform so physics and next-frame logic work perfectly
+        camera.position.copy(realCamPos);
+        camera.rotation.copy(realCamRot);
+      }
     };
 
     const triggerGameOver = (killerName: string) => {
@@ -2143,14 +2286,19 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
 
     // Match Reset Function
     const resetMatch = () => {
-      camera.position.set(0, getTerrainHeight(0, 20) + 1.85, 20);
+      camera.position.set(0, 445, -560);
       yaw = 0;
       pitch = 0;
       targetYaw = 0;
       targetPitch = 0;
       camera.rotation.set(0, 0, 0, 'YXZ');
       verticalVelocity = 0;
-      isGrounded = true;
+      isGrounded = false;
+      planeZ = -550;
+      airplaneGroup.visible = true;
+      airplaneGroup.position.set(0, 450, planeZ);
+      stateRef.current.dropPhase = 'in_plane';
+      setDropPhase('in_plane');
 
       stateRef.current.playerHealth = 100;
       stateRef.current.playerShield = 50;
@@ -2305,6 +2453,7 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
       document.removeEventListener('pointerlockchange', onPointerLockChange);
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('orientationchange', handleResize);
+      window.removeEventListener('blur', onWindowBlur);
       resizeObserver.disconnect();
       window.removeEventListener('popstate', handlePopState);
       window.removeEventListener('beforeunload', handleBeforeUnload);
@@ -2505,10 +2654,11 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
     <div
       id="fps-game-container"
       className="fixed inset-0 w-screen h-screen h-[100dvh] bg-slate-950 overflow-hidden select-none font-sans game-viewport m-0 p-0 border-none rounded-none"
+      style={{ touchAction: 'none', WebkitUserSelect: 'none' }}
       ref={containerRef}
     >
       {/* 3D WebGL Canvas */}
-      <canvas ref={canvasRef} className="w-full h-full block cursor-crosshair" />
+      <canvas ref={canvasRef} className="w-full h-full block cursor-crosshair" style={{ touchAction: 'none' }} />
 
       {/* Auto-Rotate to Landscape Guidance Banner for Mobile */}
       {isPortrait && (
@@ -2567,26 +2717,26 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
         </div>
       )}
 
-      {/* HUD OVERLAY */}
-      <div className="absolute inset-0 pointer-events-none flex flex-col justify-between p-2.5 sm:p-4 z-20 text-white">
-        {/* TOP BAR: Radar + Objective Guidance + Match Status + Controls */}
-        <div className="flex items-start justify-between gap-2 sm:gap-3">
-          {/* Top-Left: Tactical Radar Mini-Map */}
+      {/* HUD OVERLAY CONTAINER */}
+      <div className="absolute inset-0 pointer-events-none z-20 text-white select-none">
+        {/* TOP HUD BAR: Radar + Telemetry + Essential Game Controls */}
+        <div className="absolute top-0 inset-x-0 p-2 sm:p-3 flex items-start justify-between gap-2 pointer-events-none">
+          {/* Top-Left: Mini-Map Radar & Safe Zone Indicator */}
           <div className="flex items-start gap-2 pointer-events-auto">
-            <div className="relative bg-slate-950/80 backdrop-blur-md p-1 sm:p-1.5 rounded-2xl border border-slate-800 shadow-xl flex flex-col items-center">
-              <canvas ref={radarCanvasRef} width={100} height={100} className="w-[80px] h-[80px] sm:w-[120px] sm:h-[120px] rounded-xl block" />
-              <div className="mt-0.5 text-[9px] sm:text-[10px] font-mono font-bold flex items-center gap-1 text-slate-300">
-                <Navigation className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-emerald-400" />
+            <div className="relative bg-slate-950/85 backdrop-blur-md p-1 rounded-2xl border border-slate-800 shadow-xl flex flex-col items-center">
+              <canvas ref={radarCanvasRef} width={100} height={100} className="w-[64px] h-[64px] sm:w-[96px] sm:h-[96px] rounded-xl block" />
+              <div className="mt-0.5 text-[8px] sm:text-[10px] font-mono font-bold flex items-center gap-1 text-slate-300">
+                <Navigation className="w-2.5 h-2.5 text-emerald-400" />
                 <span>{isInsideSafeZone ? `SAFE (${distanceToSafeCenter}m)` : `ZONE!`}</span>
               </div>
             </div>
           </div>
 
-          {/* Top-Center: Active Objective & Dynamic Tips Banner */}
-          <div className="hidden sm:flex flex-1 max-w-xl flex-col items-center gap-1.5">
-            {/* Compass Ribbon */}
-            <div className="bg-slate-950/80 backdrop-blur-md px-3.5 py-1 rounded-xl border border-slate-800 shadow-lg flex items-center gap-2.5">
-              <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-amber-400">
+          {/* Top-Center: Tactical Telemetry (Compass • Storm Clock • Alive • Kills) */}
+          <div className="flex flex-col items-center gap-1 pointer-events-auto">
+            <div className="bg-slate-950/85 backdrop-blur-md px-2.5 sm:px-3 py-1 rounded-xl border border-slate-800 shadow-lg flex items-center gap-2 text-xs font-mono font-bold">
+              {/* Compass Heading */}
+              <div className="flex items-center gap-1 text-amber-400">
                 <Compass className="w-3.5 h-3.5" />
                 <span>{compassHeading}°</span>
                 <span className="text-white">
@@ -2600,135 +2750,135 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
                 </span>
               </div>
 
-              {/* Storm Safe Zone Phase Clock */}
-              <div className={`px-2 py-0.5 rounded-lg border text-[10px] sm:text-[11px] font-mono font-bold flex items-center gap-1.5 ${
-                isInsideSafeZone
-                  ? 'bg-slate-900 border-slate-700 text-slate-300'
-                  : 'bg-rose-950 border-rose-500 text-rose-300 animate-pulse'
-              }`}>
-                <Clock className="w-3 h-3 text-cyan-400" />
+              <div className="w-[1px] h-3 bg-slate-700" />
+
+              {/* Storm Clock */}
+              <div className={`flex items-center gap-1 ${isInsideSafeZone ? 'text-cyan-300' : 'text-rose-400 animate-pulse'}`}>
+                <Clock className="w-3 h-3" />
                 <span>
-                  {isStormShrinking ? 'STORM: ' : `PHASE ${stormPhase}: `}
+                  {isStormShrinking ? 'STORM: ' : 'ZONE: '}
                   {Math.floor(stormTimer / 60)}:{(stormTimer % 60).toString().padStart(2, '0')}
                 </span>
               </div>
+
+              <div className="w-[1px] h-3 bg-slate-700" />
+
+              {/* Alive & Kills */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-slate-400">ALIVE</span>
+                <span className="text-emerald-400 font-black">{playersAlive}</span>
+                <span className="text-slate-600 font-normal">|</span>
+                <Skull className="w-3 h-3 text-rose-400" />
+                <span className="text-white font-black">{playerKills}</span>
+              </div>
             </div>
 
-            {/* Contextual Tactical Tip / Goal */}
-            <div className="bg-slate-950/90 backdrop-blur-md border border-indigo-500/40 px-3 py-0.5 rounded-full text-[11px] font-mono font-medium text-slate-200 shadow-lg flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-indigo-400 animate-ping" />
-              <span>{activeObjectiveTip}</span>
+            {/* Tactical Health & Shield Dual Gauge */}
+            <div className="bg-slate-950/90 backdrop-blur-md px-2.5 sm:px-3.5 py-1 rounded-xl border border-slate-800 shadow-xl flex items-center gap-2 sm:gap-3">
+              {/* Shield */}
+              <div className="flex items-center gap-1.5 w-20 sm:w-28">
+                <Shield className="w-3 h-3 text-cyan-400 shrink-0" />
+                <div className="w-full">
+                  <div className="flex justify-between items-center text-[8px] sm:text-[9px] font-mono font-bold leading-none mb-0.5">
+                    <span className="text-cyan-400">SHIELD</span>
+                    <span className="text-slate-200">{playerShield}</span>
+                  </div>
+                  <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-cyan-400 rounded-full transition-all duration-150"
+                      style={{ width: `${Math.max(0, playerShield)}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="w-[1px] h-4 bg-slate-800" />
+
+              {/* Health */}
+              <div className="flex items-center gap-1.5 w-20 sm:w-28">
+                <Heart className="w-3 h-3 text-emerald-400 shrink-0" />
+                <div className="w-full">
+                  <div className="flex justify-between items-center text-[8px] sm:text-[9px] font-mono font-bold leading-none mb-0.5">
+                    <span className="text-emerald-400">HEALTH</span>
+                    <span className="text-slate-200">{playerHealth}</span>
+                  </div>
+                  <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-150 ${
+                        playerHealth > 30 ? 'bg-emerald-500' : 'bg-rose-500 animate-pulse'
+                      }`}
+                      style={{ width: `${Math.max(0, playerHealth)}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
+
+            {/* Tactical Tip Line (Compact, subtle) */}
+            {activeObjectiveTip && (
+              <div className="hidden sm:inline-flex bg-slate-950/80 backdrop-blur-sm border border-indigo-500/30 px-2.5 py-0.5 rounded-full text-[10px] font-mono text-slate-300 items-center gap-1.5 shadow-md">
+                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-ping" />
+                <span>{activeObjectiveTip}</span>
+              </div>
+            )}
           </div>
 
-          {/* Top-Right: Telemetry + Action Buttons */}
-          <div className="flex items-center gap-1.5 sm:gap-2 pointer-events-auto">
-            {/* Alive & Kills */}
-            <div className="bg-slate-950/80 backdrop-blur-md px-2.5 sm:px-3 py-1.5 rounded-xl border border-slate-800 flex items-center gap-2 shadow-lg">
-              <div className="text-xs font-mono font-bold">
-                <span className="text-slate-400 mr-1 text-[10px] sm:text-[11px]">ALIVE</span>
-                <span className="text-emerald-400 text-xs sm:text-sm font-black">{playersAlive}</span>
-              </div>
-              <div className="w-[1px] h-3 bg-slate-700" />
-              <div className="text-xs font-mono font-bold flex items-center gap-1">
-                <Skull className="w-3.5 h-3.5 text-rose-400" />
-                <span className="text-white text-xs sm:text-sm font-black">{playerKills}</span>
-              </div>
-            </div>
+          {/* Top-Right: Clean In-Game Utility Controls Only */}
+          <div className="flex items-center gap-1.5 pointer-events-auto">
+            {/* Toggle On-Screen Virtual Controls */}
+            <button
+              id="btn-toggle-controls"
+              onClick={() => setShowOnScreenControls(!showOnScreenControls)}
+              className={`p-1.5 sm:p-2 rounded-xl border transition-colors shadow-lg cursor-pointer ${
+                showOnScreenControls
+                  ? 'bg-indigo-600 text-white border-indigo-400 shadow-indigo-600/30'
+                  : 'bg-slate-900/85 text-slate-400 border-slate-800 hover:bg-slate-800 hover:text-slate-200'
+              }`}
+              title={showOnScreenControls ? 'Hide Virtual Buttons' : 'Show Virtual Buttons'}
+            >
+              <Gamepad2 className="w-3.5 h-3.5" />
+            </button>
 
             {/* Pause / Resume Button */}
             {hasStartedPlaying && !isGameOver && !isVictory && (
               <button
                 id="btn-toggle-pause"
                 onClick={togglePauseMatch}
-                className={`p-1.5 sm:p-2 rounded-xl border text-xs font-mono transition-all shadow-lg flex items-center gap-1 cursor-pointer ${
-                  isMatchPaused
-                    ? 'bg-amber-500 text-slate-950 border-amber-400 font-bold'
-                    : 'bg-slate-900/80 text-slate-300 border-slate-800 hover:bg-slate-800'
-                }`}
+                className="p-1.5 sm:p-2 rounded-xl bg-slate-900/85 border border-slate-800 hover:bg-slate-800 text-slate-200 transition-colors shadow-lg cursor-pointer"
                 title={isMatchPaused ? 'Resume Match' : 'Pause Match'}
               >
-                {isMatchPaused ? <Play className="w-3.5 h-3.5 fill-current" /> : <Pause className="w-3.5 h-3.5" />}
+                {isMatchPaused ? <Play className="w-3.5 h-3.5 fill-current text-amber-400" /> : <Pause className="w-3.5 h-3.5 text-amber-400" />}
               </button>
             )}
-
-            {/* Fullscreen Toggle */}
-            <button
-              id="btn-toggle-fullscreen"
-              onClick={toggleFullscreen}
-              className="p-1.5 sm:p-2 rounded-xl bg-slate-900/80 border border-slate-800 hover:bg-slate-800 text-slate-300 transition-colors shadow-lg cursor-pointer"
-              title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
-            >
-              {isFullscreen ? <Minimize2 className="w-3.5 h-3.5 text-cyan-400" /> : <Maximize2 className="w-3.5 h-3.5 text-cyan-400" />}
-            </button>
-
-            {/* Auto-Rotate / Landscape Orientation Lock */}
-            <button
-              id="btn-toggle-auto-rotate"
-              onClick={handleAutoRotateLandscape}
-              className="p-1.5 sm:p-2 rounded-xl bg-slate-900/80 border border-slate-800 hover:bg-slate-800 text-slate-300 transition-colors shadow-lg cursor-pointer flex items-center gap-1 active:scale-95"
-              title="Auto-Rotate to Fullscreen Landscape"
-            >
-              <RotateCw className="w-3.5 h-3.5 text-amber-400" />
-              <span className="hidden md:inline text-[10px] font-mono">ROTATE</span>
-            </button>
-
-            {/* C# Unity Scripts & Setup Guide Modal Toggle */}
-            {onOpenStudio && (
-              <button
-                id="btn-open-studio-header"
-                onClick={onOpenStudio}
-                className="hidden sm:flex px-2.5 py-1.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-800 text-slate-300 text-xs font-mono transition-colors shadow-lg items-center gap-1 cursor-pointer"
-                title="View Unity C# Scripts & Documentation"
-              >
-                <Code2 className="w-3.5 h-3.5 text-emerald-400" />
-                <span>SCRIPTS</span>
-              </button>
-            )}
-
-            {/* Guide Button */}
-            <button
-              id="btn-open-game-guide"
-              onClick={() => setShowGuideModal(true)}
-              className="hidden sm:flex px-2.5 py-1.5 rounded-xl bg-indigo-600/90 hover:bg-indigo-600 text-white text-xs font-bold font-mono transition-all items-center gap-1 shadow-lg border border-indigo-500 cursor-pointer"
-              title="How to Play"
-            >
-              <HelpCircle className="w-3.5 h-3.5" />
-              <span>GUIDE</span>
-            </button>
-
-            {/* On-Screen Controls Toggle */}
-            <button
-              id="btn-toggle-touch-controls"
-              onClick={() => setShowOnScreenControls(!showOnScreenControls)}
-              className={`p-1.5 sm:p-2 rounded-xl border text-xs font-mono transition-all shadow-lg flex items-center gap-1 cursor-pointer ${
-                showOnScreenControls
-                  ? 'bg-amber-500 text-slate-950 border-amber-400 font-bold'
-                  : 'bg-slate-900/80 text-slate-300 border-slate-800 hover:bg-slate-800'
-              }`}
-              title="Toggle Mobile Controls"
-            >
-              <Gamepad2 className="w-3.5 h-3.5" />
-            </button>
 
             {/* Sound Mute Toggle */}
             <button
               id="btn-toggle-sound"
               onClick={() => setIsSoundMuted(!isSoundMuted)}
-              className="p-1.5 sm:p-2 rounded-xl bg-slate-900/80 border border-slate-800 hover:bg-slate-800 text-slate-300 transition-colors shadow-lg cursor-pointer"
+              className="p-1.5 sm:p-2 rounded-xl bg-slate-900/85 border border-slate-800 hover:bg-slate-800 text-slate-200 transition-colors shadow-lg cursor-pointer"
               title={isSoundMuted ? 'Unmute SFX' : 'Mute SFX'}
             >
               {isSoundMuted ? <VolumeX className="w-3.5 h-3.5 text-rose-400" /> : <Volume2 className="w-3.5 h-3.5 text-emerald-400" />}
             </button>
+
+            {/* Fullscreen Toggle */}
+            <button
+              id="btn-toggle-fullscreen"
+              onClick={toggleFullscreen}
+              className="p-1.5 sm:p-2 rounded-xl bg-slate-900/85 border border-slate-800 hover:bg-slate-800 text-slate-200 transition-colors shadow-lg cursor-pointer"
+              title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+            >
+              {isFullscreen ? <Minimize2 className="w-3.5 h-3.5 text-cyan-400" /> : <Maximize2 className="w-3.5 h-3.5 text-cyan-400" />}
+            </button>
           </div>
         </div>
 
-        {/* Dynamic Kill Feed */}
-        <div className="absolute top-16 sm:top-20 right-2.5 sm:right-4 flex flex-col gap-1 z-15 pointer-events-none max-w-[200px] sm:max-w-xs">
+        {/* Dynamic Kill Feed (Top right beneath utility buttons) */}
+        <div className="absolute top-12 sm:top-14 right-2 sm:right-3 flex flex-col gap-1 z-15 pointer-events-none max-w-[190px] sm:max-w-xs">
           {killFeed.slice(0, 3).map((item) => (
             <div
               key={item.id}
-              className="bg-slate-950/80 border border-slate-800 backdrop-blur-sm px-2 py-0.5 rounded-lg text-[10px] font-mono flex items-center gap-1 shadow-md"
+              className="bg-slate-950/80 border border-slate-800 backdrop-blur-sm px-2 py-0.5 rounded-lg text-[9px] sm:text-[10px] font-mono flex items-center gap-1 shadow-md"
             >
               <span className={`font-bold ${item.killer === 'You' ? 'text-emerald-400' : 'text-slate-200'}`}>
                 {item.killer}
@@ -2739,9 +2889,40 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
           ))}
         </div>
 
+        {/* Skydiving JUMP Button */}
+        {dropPhase === 'in_plane' && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-30">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                stateRef.current.dropPhase = 'freefall';
+                setDropPhase('freefall');
+              }}
+              className="pointer-events-auto px-14 py-4 bg-yellow-500 hover:bg-yellow-400 text-slate-900 font-black text-3xl tracking-widest uppercase rounded-sm border-b-4 border-yellow-700 active:border-b-0 active:mt-1 transition-all shadow-[0_0_20px_rgba(234,179,8,0.5)]"
+            >
+              JUMP
+            </button>
+          </div>
+        )}
+        {dropPhase === 'freefall' && (
+          <div className="absolute inset-0 flex flex-col justify-end items-center pointer-events-none z-30 pb-32">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                stateRef.current.dropPhase = 'parachute';
+                setDropPhase('parachute');
+                // The parachute model doesn't exist in React state directly, but logic loop will animate it.
+              }}
+              className="pointer-events-auto px-8 py-3 bg-blue-500 hover:bg-blue-400 text-white font-black text-xl tracking-widest uppercase rounded-sm border-b-4 border-blue-700 active:border-b-0 active:mt-1 transition-all shadow-lg"
+            >
+              OPEN PARACHUTE
+            </button>
+          </div>
+        )}
+
         {/* Center Crosshair & High-Clarity Hitmarker */}
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          {(!isAimingDownSights || activeWeaponType !== 'sniper') && (
+          {dropPhase === 'landed' && (!isAimingDownSights || activeWeaponType !== 'sniper') && (
             <div className="relative w-7 h-7 flex items-center justify-center drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]">
               <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 border border-black/80" />
               <div className="absolute top-0 w-0.5 h-2 bg-white border-x border-black/80" />
@@ -2751,7 +2932,7 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
             </div>
           )}
 
-          {/* Full Military Precision Sniper Scope Overlay (Active when ADS with Sniper) */}
+          {/* Full Military Precision Sniper Scope Overlay */}
           {isAimingDownSights && activeWeaponType === 'sniper' && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
               <div className="relative w-[min(88vw,460px)] h-[min(88vw,460px)] rounded-full border-[3px] border-emerald-500/90 shadow-[0_0_0_9999px_rgba(3,7,18,0.92)] flex items-center justify-center">
@@ -2780,7 +2961,7 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
 
         {/* Nearby Loot Interaction Prompt */}
         {nearbyLootPrompt && (
-          <div className="self-center bg-slate-900/95 border border-indigo-500 px-4 py-1.5 rounded-xl shadow-2xl text-xs font-mono font-bold text-white flex items-center gap-2 animate-bounce">
+          <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-slate-900/95 border border-indigo-500 px-3.5 py-1.5 rounded-xl shadow-2xl text-xs font-mono font-bold text-white flex items-center gap-2 animate-bounce pointer-events-auto">
             <span className="px-1.5 py-0.5 rounded bg-indigo-600 text-white text-[11px] font-black">E</span>
             <span>{nearbyLootPrompt}</span>
           </div>
@@ -2790,355 +2971,280 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
         {hasStartedPlaying && !isPointerLocked && !isMatchPaused && !isGameOver && !isVictory && !isTouchDevice && (
           <div
             onClick={() => canvasRef.current?.requestPointerLock()}
-            className="self-center bg-indigo-600/90 hover:bg-indigo-600 text-white font-mono text-xs font-bold px-4 py-1.5 rounded-xl shadow-xl border border-indigo-400 cursor-pointer pointer-events-auto flex items-center gap-2 animate-pulse"
+            className="absolute top-1/4 left-1/2 -translate-x-1/2 bg-indigo-600/90 hover:bg-indigo-600 text-white font-mono text-xs font-bold px-4 py-1.5 rounded-xl shadow-xl border border-indigo-400 cursor-pointer pointer-events-auto flex items-center gap-2 animate-pulse"
           >
             <Crosshair className="w-4 h-4" />
             <span>Click screen to lock mouse & aim</span>
           </div>
         )}
 
-        {/* MOBILE & VIRTUAL CONTROLS OVERLAY (When enabled) */}
+        {/* BOTTOM-LEFT: Virtual Movement Joystick & Sprint */}
         {showOnScreenControls && hasStartedPlaying && !isMatchPaused && !isGameOver && !isVictory && (
-          <div className="w-full flex items-end justify-between pointer-events-auto pb-1 select-none z-20">
-            {/* Left: Virtual Analog Joystick with Sprint */}
-            <div className="flex flex-col items-center select-none pointer-events-auto">
+          <div className="absolute bottom-2 left-2 sm:bottom-4 sm:left-4 flex items-end gap-2 pointer-events-auto z-25 select-none">
+            <div
+              id="mobile-virtual-joystick"
+              className={`relative w-24 h-24 sm:w-28 sm:h-28 rounded-full border-2 transition-colors flex items-center justify-center backdrop-blur-md shadow-2xl touch-none ${
+                isJoystickActive
+                  ? 'border-indigo-500 bg-slate-950/85'
+                  : 'border-slate-700/80 bg-slate-950/70'
+              }`}
+              onTouchStart={handleJoystickStart}
+              onTouchMove={handleJoystickMove}
+              onTouchEnd={handleJoystickEnd}
+              onTouchCancel={handleJoystickEnd}
+            >
+              {/* Direction indicators */}
+              <span className="absolute top-1 text-[8px] text-slate-500 font-mono">▲</span>
+              <span className="absolute bottom-1 text-[8px] text-slate-500 font-mono">▼</span>
+              <span className="absolute left-1 text-[8px] text-slate-500 font-mono">◀</span>
+              <span className="absolute right-1 text-[8px] text-slate-500 font-mono">▶</span>
+
+              {/* Joystick Knob */}
               <div
-                id="mobile-virtual-joystick"
-                className={`relative w-28 h-28 sm:w-32 sm:h-32 rounded-full border-2 transition-colors flex items-center justify-center backdrop-blur-md shadow-2xl touch-none ${
+                className={`w-10 h-10 rounded-full shadow-xl flex items-center justify-center text-[10px] font-bold transition-transform duration-75 border border-white/40 ${
                   isJoystickActive
-                    ? 'border-indigo-500 bg-slate-950/85'
-                    : 'border-slate-700/80 bg-slate-950/70'
+                    ? 'bg-gradient-to-tr from-indigo-500 to-cyan-400 text-white shadow-indigo-500/50 scale-105'
+                    : 'bg-slate-800 text-slate-400'
                 }`}
-                onTouchStart={handleJoystickStart}
-                onTouchMove={handleJoystickMove}
-                onTouchEnd={handleJoystickEnd}
-                onTouchCancel={handleJoystickEnd}
+                style={{
+                  transform: `translate(${joystickKnobPos.x}px, ${joystickKnobPos.y}px)`
+                }}
               >
-                {/* Direction indicators */}
-                <span className="absolute top-1 text-[9px] text-slate-500 font-mono">▲</span>
-                <span className="absolute bottom-1 text-[9px] text-slate-500 font-mono">▼</span>
-                <span className="absolute left-1.5 text-[9px] text-slate-500 font-mono">◀</span>
-                <span className="absolute right-1.5 text-[9px] text-slate-500 font-mono">▶</span>
-
-                {/* Joystick Knob */}
-                <div
-                  className={`w-12 h-12 rounded-full shadow-xl flex items-center justify-center text-[10px] font-bold transition-transform duration-75 border border-white/40 ${
-                    isJoystickActive
-                      ? 'bg-gradient-to-tr from-indigo-500 to-cyan-400 text-white shadow-indigo-500/50 scale-105'
-                      : 'bg-slate-800 text-slate-400'
-                  }`}
-                  style={{
-                    transform: `translate(${joystickKnobPos.x}px, ${joystickKnobPos.y}px)`
-                  }}
-                >
-                  <Move className="w-4 h-4 text-white/90" />
-                </div>
+                <Move className="w-3.5 h-3.5 text-white/90" />
               </div>
-
-              {/* Sprint Toggle */}
-              <button
-                id="btn-mobile-sprint"
-                onTouchStart={(e) => {
-                  e.stopPropagation();
-                  virtualInputRef.current.sprint = !virtualInputRef.current.sprint;
-                }}
-                onClick={() => {
-                  virtualInputRef.current.sprint = !virtualInputRef.current.sprint;
-                }}
-                className={`mt-1 px-2.5 py-1 rounded-full text-[10px] font-mono font-bold flex items-center gap-1 border transition-all cursor-pointer ${
-                  virtualInputRef.current.sprint
-                    ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md shadow-amber-500/30'
-                    : 'bg-slate-900/90 text-slate-300 border-slate-700 hover:bg-slate-800'
-                }`}
-              >
-                <Zap className="w-3 h-3 text-amber-400" />
-                <span>SPRINT</span>
-              </button>
             </div>
 
-            {/* Right: Mobile Action Buttons Cluster */}
-            <div className="flex items-end gap-2 sm:gap-3 pointer-events-auto select-none">
-              {/* Secondary Actions */}
-              <div className="grid grid-cols-2 gap-1.5 sm:gap-2">
-                {/* Loot */}
-                <button
-                  id="btn-mobile-loot"
-                  onTouchStart={(e) => {
-                    e.stopPropagation();
-                    pickupLootRef.current?.();
-                  }}
-                  onClick={() => pickupLootRef.current?.()}
-                  className={`w-11 h-11 sm:w-12 sm:h-12 rounded-2xl flex flex-col items-center justify-center font-bold text-[10px] shadow-lg border transition-all cursor-pointer ${
-                    nearbyLootPrompt
-                      ? 'bg-indigo-600 text-white border-indigo-400 animate-bounce'
-                      : 'bg-slate-900/85 text-slate-300 border-slate-700 active:bg-indigo-600'
-                  }`}
-                  title="Loot [E]"
-                >
-                  <Target className="w-3.5 h-3.5 mb-0.5 text-indigo-400" />
-                  <span>LOOT [E]</span>
-                </button>
-
-                {/* Reload */}
-                <button
-                  id="btn-mobile-reload"
-                  onTouchStart={(e) => {
-                    e.stopPropagation();
-                    reloadWeaponRef.current?.();
-                  }}
-                  onClick={() => reloadWeaponRef.current?.()}
-                  className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-slate-900/85 hover:bg-slate-800 active:bg-amber-600 text-slate-200 font-bold text-[10px] flex flex-col items-center justify-center border border-slate-700 shadow-lg cursor-pointer"
-                  title="Reload [R]"
-                >
-                  <RotateCcw className="w-3.5 h-3.5 mb-0.5 text-amber-400" />
-                  <span>RELOAD</span>
-                </button>
-
-                {/* Jump */}
-                <button
-                  id="btn-mobile-jump"
-                  onTouchStart={(e) => {
-                    e.stopPropagation();
-                    virtualInputRef.current.jump = true;
-                  }}
-                  onMouseDown={() => (virtualInputRef.current.jump = true)}
-                  className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-slate-900/85 hover:bg-slate-800 active:bg-emerald-600 text-slate-200 font-bold text-[10px] flex flex-col items-center justify-center border border-slate-700 shadow-lg cursor-pointer"
-                  title="Jump"
-                >
-                  <span className="text-emerald-400 font-black text-xs">▲</span>
-                  <span>JUMP</span>
-                </button>
-
-                {/* ADS Zoom */}
-                <button
-                  id="btn-mobile-ads"
-                  onTouchStart={(e) => {
-                    e.stopPropagation();
-                    const next = !isAimingDownSights;
-                    setIsAimingDownSights(next);
-                    stateRef.current.isAimingDownSights = next;
-                  }}
-                  onClick={() => {
-                    const next = !isAimingDownSights;
-                    setIsAimingDownSights(next);
-                    stateRef.current.isAimingDownSights = next;
-                  }}
-                  className={`w-11 h-11 sm:w-12 sm:h-12 rounded-2xl flex flex-col items-center justify-center font-bold text-[10px] border shadow-lg transition-all cursor-pointer ${
-                    isAimingDownSights
-                      ? 'bg-cyan-500 text-slate-950 border-cyan-300 font-black'
-                      : 'bg-slate-900/85 text-slate-200 border-slate-700 active:bg-cyan-600'
-                  }`}
-                  title="Aim Down Sights (Zoom)"
-                >
-                  <Crosshair className="w-3.5 h-3.5 mb-0.5 text-cyan-400" />
-                  <span>ZOOM</span>
-                </button>
-              </div>
-
-              {/* Primary FIRE Button */}
-              <button
-                id="btn-mobile-fire"
-                onTouchStart={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  stateRef.current.isFiringContinuous = true;
-                  shootWeaponRef.current?.();
-                }}
-                onTouchEnd={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  stateRef.current.isFiringContinuous = false;
-                }}
-                onMouseDown={() => {
-                  stateRef.current.isFiringContinuous = true;
-                  shootWeaponRef.current?.();
-                }}
-                onMouseUp={() => {
-                  stateRef.current.isFiringContinuous = false;
-                }}
-                className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-gradient-to-tr from-rose-600 to-red-500 active:from-rose-700 active:to-red-600 text-white font-black text-xs sm:text-sm flex flex-col items-center justify-center border-2 border-red-300 shadow-2xl shadow-rose-600/50 active:scale-95 transition-transform select-none touch-none cursor-pointer"
-                title="Fire Weapon"
-              >
-                <span className="text-base sm:text-lg">🔥</span>
-                <span className="tracking-tight text-[11px] sm:text-xs">FIRE</span>
-              </button>
-            </div>
+            {/* Sprint Toggle Button */}
+            <button
+              id="btn-mobile-sprint"
+              onTouchStart={(e) => {
+                e.stopPropagation();
+                virtualInputRef.current.sprint = !virtualInputRef.current.sprint;
+              }}
+              onClick={() => {
+                virtualInputRef.current.sprint = !virtualInputRef.current.sprint;
+              }}
+              className={`w-11 h-11 sm:w-12 sm:h-12 rounded-xl text-[9px] sm:text-[10px] font-mono font-bold flex flex-col items-center justify-center gap-0.5 border shadow-lg transition-all cursor-pointer ${
+                virtualInputRef.current.sprint
+                  ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-amber-500/30'
+                  : 'bg-slate-900/90 text-slate-300 border-slate-700 hover:bg-slate-800'
+              }`}
+              title="Sprint [Shift]"
+            >
+              <Zap className="w-3.5 h-3.5 text-amber-400" />
+              <span>SPRINT</span>
+            </button>
           </div>
         )}
 
-        {/* BOTTOM HUD: Vitality Bars + Mouse Sens + Weapon Slots + Ammo */}
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-end justify-between gap-2 sm:gap-4">
-          {/* Health & Shield Vitality Bars */}
-          <div className="bg-slate-950/85 backdrop-blur-md p-2 sm:p-2.5 rounded-2xl border border-slate-800 shadow-xl max-w-full sm:max-w-xs w-full space-y-1.5 pointer-events-auto">
-            {/* Shield Bar (Cyan) */}
-            <div>
-              <div className="flex justify-between items-center text-[10px] sm:text-[11px] font-mono font-bold mb-0.5">
-                <span className="text-cyan-400 flex items-center gap-1">
-                  <Shield className="w-3 h-3" /> SHIELD
-                </span>
-                <span className="text-slate-300">{playerShield} / 100</span>
-              </div>
-              <div className="w-full h-1.5 sm:h-2 bg-slate-800 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-cyan-400 rounded-full transition-all duration-150"
-                  style={{ width: `${Math.max(0, playerShield)}%` }}
-                />
-              </div>
-            </div>
-
-            {/* Health Bar (Green) */}
-            <div>
-              <div className="flex justify-between items-center text-[10px] sm:text-[11px] font-mono font-bold mb-0.5">
-                <span className="text-emerald-400 flex items-center gap-1">
-                  <Heart className="w-3 h-3" /> HEALTH
-                </span>
-                <span className="text-slate-300">{playerHealth} / 100</span>
-              </div>
-              <div className="w-full h-1.5 sm:h-2 bg-slate-800 rounded-full overflow-hidden">
-                <div
-                  className={`h-full rounded-full transition-all duration-150 ${
-                    playerHealth > 30 ? 'bg-emerald-500' : 'bg-rose-500 animate-pulse'
+        {/* BOTTOM-CENTER: COMPLETE WEAPON DOCK (Elevated on mobile to prevent thumb overlap) */}
+        <div className="absolute bottom-24 sm:bottom-3 left-1/2 -translate-x-1/2 flex items-center pointer-events-auto z-25">
+          <div className="bg-slate-950/90 backdrop-blur-md p-1 sm:p-1.5 rounded-2xl border border-slate-800 shadow-2xl flex items-center gap-1 sm:gap-1.5">
+            {(['rifle', 'shotgun', 'sniper'] as WeaponType[]).map((wType, idx) => {
+              const w = WEAPONS_CATALOG[wType];
+              const isActive = activeWeaponType === wType;
+              const ammo = stateRef.current?.ammoByWeapon?.[wType] || { current: w.magSize, reserve: 60 };
+              return (
+                <button
+                  key={wType}
+                  id={`btn-weapon-slot-${wType}`}
+                  onClick={() => {
+                    const newW = WEAPONS_CATALOG[wType];
+                    stateRef.current.activeWeapon = newW;
+                    setActiveWeaponType(wType);
+                    const ammoState = stateRef.current.ammoByWeapon[wType];
+                    setCurrentAmmo(ammoState.current);
+                    setReserveAmmo(ammoState.reserve);
+                  }}
+                  className={`px-2 py-1 sm:px-3 sm:py-1.5 rounded-xl flex items-center gap-1 sm:gap-1.5 transition-all cursor-pointer border font-mono ${
+                    isActive
+                      ? 'bg-gradient-to-r from-indigo-600 to-cyan-600 border-cyan-400 text-white font-bold shadow-lg shadow-indigo-600/40 scale-105'
+                      : 'bg-slate-900/80 border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800'
                   }`}
-                  style={{ width: `${Math.max(0, playerHealth)}%` }}
-                />
-              </div>
-            </div>
-
-            {/* Quick Sensitivity Control */}
-            <div className="pt-1 flex items-center justify-between text-[9px] sm:text-[10px] font-mono text-slate-400 border-t border-slate-800/80">
-              <span className="flex items-center gap-1">
-                <Sliders className="w-2.5 h-2.5" /> Sens: {mouseSensitivity}x
-              </span>
-              <input
-                type="range"
-                min="0.8"
-                max="4.0"
-                step="0.2"
-                value={mouseSensitivity}
-                onChange={(e) => setMouseSensitivity(parseFloat(e.target.value))}
-                className="w-20 sm:w-24 h-1 bg-slate-800 rounded appearance-none cursor-pointer accent-indigo-500"
-              />
-            </div>
-          </div>
-
-          {/* Weapon Slots & Active Ammunition */}
-          <div className="flex items-center justify-between sm:justify-end gap-2 sm:gap-3 pointer-events-auto">
-            {/* Weapon Slots Selector */}
-            <div className="flex items-center gap-1 bg-slate-950/85 backdrop-blur-md p-1 sm:p-1.5 rounded-xl border border-slate-800 shadow-xl font-mono text-xs">
-              {(['rifle', 'shotgun', 'sniper'] as WeaponType[]).map((wType, idx) => {
-                const w = WEAPONS_CATALOG[wType];
-                const isActive = activeWeaponType === wType;
-                return (
-                  <button
-                    key={wType}
-                    onClick={() => {
-                      const newW = WEAPONS_CATALOG[wType];
-                      stateRef.current.activeWeapon = newW;
-                      setActiveWeaponType(wType);
-                      const ammoState = stateRef.current.ammoByWeapon[wType];
-                      setCurrentAmmo(ammoState.current);
-                      setReserveAmmo(ammoState.reserve);
-                    }}
-                    className={`px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg flex items-center gap-1 transition-all cursor-pointer ${
-                      isActive
-                        ? 'bg-indigo-600 text-white font-bold shadow-md shadow-indigo-600/30'
-                        : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                    }`}
-                  >
-                    <span className="text-[10px] opacity-75">[{idx + 1}]</span>
-                    <span className="text-xs">{w.iconName}</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Ammo Counter Box */}
-            <div className="bg-slate-950/85 backdrop-blur-md p-2 sm:p-2.5 rounded-2xl border border-slate-800 shadow-xl min-w-[100px] sm:min-w-[130px] text-right font-mono">
-              <div className="text-[9px] sm:text-[10px] text-slate-400 font-semibold uppercase tracking-wider mb-0.5 truncate">
-                {WEAPONS_CATALOG[activeWeaponType].name}
-              </div>
-              <div className="text-xl sm:text-2xl font-black text-white flex items-baseline justify-end gap-1">
-                <span className={currentAmmo <= 5 ? 'text-rose-400 animate-pulse' : 'text-white'}>
-                  {isReloading ? 'RELOAD' : currentAmmo}
-                </span>
-                <span className="text-[10px] sm:text-xs text-slate-500">/ {reserveAmmo}</span>
-              </div>
-            </div>
+                >
+                  <span className="text-[9px] sm:text-[10px] font-bold opacity-75">[{idx + 1}]</span>
+                  <div className="text-left">
+                    <div className="text-[10px] sm:text-xs font-bold leading-tight flex items-center gap-1">
+                      <span>{w.iconName}</span>
+                      <span className="hidden sm:inline">{w.name.split(' ')[0]}</span>
+                    </div>
+                    <div className="text-[8px] sm:text-[10px] leading-tight text-cyan-300 font-semibold">
+                      {isActive && isReloading ? 'RELOAD...' : `${isActive ? currentAmmo : ammo.current}/${isActive ? reserveAmmo : ammo.reserve}`}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </div>
+
+        {/* BOTTOM-RIGHT: ACTION BUTTONS CLUSTER (Fire, Zoom, Jump, Reload, Loot) */}
+        {showOnScreenControls && hasStartedPlaying && !isMatchPaused && !isGameOver && !isVictory && (
+          <div className="absolute bottom-2 right-2 sm:bottom-4 sm:right-4 flex items-end gap-2 pointer-events-auto z-25 select-none">
+            {/* 2x2 Grid of Actions */}
+            <div className="grid grid-cols-2 gap-1.5">
+              {/* Loot */}
+              <button
+                id="btn-mobile-loot"
+                onTouchStart={(e) => {
+                  e.stopPropagation();
+                  pickupLootRef.current?.();
+                }}
+                onClick={() => pickupLootRef.current?.()}
+                className={`w-11 h-11 sm:w-12 sm:h-12 rounded-xl flex flex-col items-center justify-center font-bold text-[9px] sm:text-[10px] shadow-lg border transition-all cursor-pointer ${
+                  nearbyLootPrompt
+                    ? 'bg-indigo-600 text-white border-indigo-400 animate-bounce shadow-indigo-500/50'
+                    : 'bg-slate-900/85 text-slate-300 border-slate-700 active:bg-indigo-600'
+                }`}
+                title="Loot [E]"
+              >
+                <Target className="w-4 h-4 mb-0.5 text-indigo-400" />
+                <span>LOOT</span>
+              </button>
+
+              {/* Reload */}
+              <button
+                id="btn-mobile-reload"
+                onTouchStart={(e) => {
+                  e.stopPropagation();
+                  reloadWeaponRef.current?.();
+                }}
+                onClick={() => reloadWeaponRef.current?.()}
+                className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl bg-slate-900/85 hover:bg-slate-800 active:bg-amber-600 text-slate-200 font-bold text-[9px] sm:text-[10px] flex flex-col items-center justify-center border border-slate-700 shadow-lg cursor-pointer"
+                title="Reload [R]"
+              >
+                <RotateCcw className="w-4 h-4 mb-0.5 text-amber-400" />
+                <span>RELOAD</span>
+              </button>
+
+              {/* Jump */}
+              <button
+                id="btn-mobile-jump"
+                onTouchStart={(e) => {
+                  e.stopPropagation();
+                  virtualInputRef.current.jump = true;
+                }}
+                onMouseDown={() => (virtualInputRef.current.jump = true)}
+                className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl bg-slate-900/85 hover:bg-slate-800 active:bg-emerald-600 text-slate-200 font-bold text-[9px] sm:text-[10px] flex flex-col items-center justify-center border border-slate-700 shadow-lg cursor-pointer"
+                title="Jump [Space]"
+              >
+                <span className="text-emerald-400 font-black text-xs leading-none">▲</span>
+                <span>JUMP</span>
+              </button>
+
+              {/* ADS Zoom */}
+              <button
+                id="btn-mobile-ads"
+                onTouchStart={(e) => {
+                  e.stopPropagation();
+                  const next = !isAimingDownSights;
+                  setIsAimingDownSights(next);
+                  stateRef.current.isAimingDownSights = next;
+                }}
+                onClick={() => {
+                  const next = !isAimingDownSights;
+                  setIsAimingDownSights(next);
+                  stateRef.current.isAimingDownSights = next;
+                }}
+                className={`w-11 h-11 sm:w-12 sm:h-12 rounded-xl flex flex-col items-center justify-center font-bold text-[9px] sm:text-[10px] border shadow-lg transition-all cursor-pointer ${
+                  isAimingDownSights
+                    ? 'bg-cyan-500 text-slate-950 border-cyan-300 font-black'
+                    : 'bg-slate-900/85 text-slate-200 border-slate-700 active:bg-cyan-600'
+                }`}
+                title="Aim Down Sights (Zoom)"
+              >
+                <Crosshair className="w-4 h-4 mb-0.5 text-cyan-400" />
+                <span>ZOOM</span>
+              </button>
+            </div>
+
+            {/* Primary FIRE Button */}
+            <button
+              id="btn-mobile-fire"
+              onTouchStart={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                stateRef.current.isFiringContinuous = true;
+                shootWeaponRef.current?.();
+              }}
+              onTouchEnd={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                stateRef.current.isFiringContinuous = false;
+              }}
+              onTouchCancel={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                stateRef.current.isFiringContinuous = false;
+              }}
+              onMouseDown={() => {
+                stateRef.current.isFiringContinuous = true;
+                shootWeaponRef.current?.();
+              }}
+              onMouseUp={() => {
+                stateRef.current.isFiringContinuous = false;
+              }}
+              className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-gradient-to-tr from-rose-600 to-red-500 active:from-rose-700 active:to-red-600 text-white font-black text-xs sm:text-sm flex flex-col items-center justify-center border-2 border-red-300 shadow-2xl shadow-rose-600/50 active:scale-95 transition-transform select-none touch-none cursor-pointer shrink-0"
+              title="Fire Weapon"
+            >
+              <span className="text-lg sm:text-xl leading-none">🔥</span>
+              <span className="tracking-tight text-[11px] sm:text-xs">FIRE</span>
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* START OVERLAY: Enter Battle Royale Arena (Explicit button start, NO auto-start) */}
+      {/* START OVERLAY: Enter Battle Royale Arena */}
       {!hasStartedPlaying && !isGameOver && !isVictory && (
         <div
           id="click-to-play-overlay"
-          className="absolute inset-0 bg-slate-950/92 backdrop-blur-md flex flex-col items-center justify-center text-center p-4 sm:p-6 z-30 overflow-y-auto select-none"
+          className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex flex-col items-center justify-center text-center p-4 sm:p-6 z-30 overflow-hidden select-none"
         >
-          <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-cyan-400 flex items-center justify-center text-white mb-3 shadow-xl shadow-indigo-600/30">
-            <Radio className="w-7 h-7 sm:w-8 sm:h-8" />
-          </div>
+          {/* Background Video */}
+          <video
+            autoPlay
+            loop
+            muted
+            playsInline
+            className="absolute inset-0 w-full h-full object-cover opacity-40 -z-10"
+            src="https://cdn.pixabay.com/video/2021/08/04/83866-584705193_large.mp4"
+          />
 
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-950/80 border border-indigo-500/40 text-[11px] font-mono font-bold text-cyan-300 mb-2">
-            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
-            <span>BATTLE ROYALE • 3D ACTION</span>
-          </div>
+          {/* Background Audio (Will try to autoplay, but usually requires interaction, we'll keep it loop and set it to play on first click if blocked) */}
+          <audio id="bg-music" autoPlay loop src="https://cdn.pixabay.com/audio/2022/10/25/audio_2069ed0cb4.mp3"></audio>
 
-          <h2 className="text-xl sm:text-3xl font-black text-white mb-2 tracking-wide font-mono">
-            WARZONE BATTLE ROYALE
-          </h2>
-          <p className="text-xs sm:text-sm text-slate-300 max-w-md mb-4 sm:mb-6 leading-relaxed">
-            15 combatants deployed to the island. Scavenge high-tier weapons, outrun the shrinking storm, and fight to be the last survivor standing!
-          </p>
+          <div className="z-10 flex flex-col items-center flex-1 justify-center">
+            <h1 className="text-4xl sm:text-6xl font-black text-transparent bg-clip-text bg-gradient-to-b from-white to-slate-400 mb-8 tracking-widest font-mono drop-shadow-2xl">
+              WARZONE BATTLE ROYALE
+            </h1>
 
-          {/* Controls Instructions Card */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-lg w-full text-xs font-mono mb-5 text-left">
-            <div className="bg-slate-900/90 border border-indigo-500/30 p-2.5 rounded-xl">
-              <span className="text-indigo-400 font-bold flex items-center gap-1 mb-1">
-                <Smartphone className="w-3.5 h-3.5" /> Mobile Controls
-              </span>
-              <p className="text-[11px] text-slate-300 leading-tight">
-                Use left-hand <span className="text-white font-bold">Virtual Joystick</span> to move • <span className="text-white font-bold">Swipe</span> screen right to aim • Press <span className="text-rose-400 font-bold">🔥 FIRE</span> to shoot.
-              </p>
-            </div>
-            <div className="bg-slate-900/90 border border-slate-800 p-2.5 rounded-xl">
-              <span className="text-amber-400 font-bold flex items-center gap-1 mb-1">
-                <Gamepad2 className="w-3.5 h-3.5" /> Desktop Controls (PC)
-              </span>
-              <p className="text-[11px] text-slate-300 leading-tight">
-                <span className="text-white font-bold">WASD</span> to walk • <span className="text-white font-bold">Mouse</span> to aim • <span className="text-amber-400 font-bold">Left Click</span> shoot • <span className="text-cyan-400 font-bold">Right Click</span> zoom • <span className="text-indigo-400 font-bold">E</span> loot.
-              </p>
-            </div>
-          </div>
-
-          <div className="flex flex-col sm:flex-row items-center gap-3">
-            <button
-              id="btn-enter-battle-royale"
-              onClick={handleStartMatch}
-              className="px-8 py-3.5 rounded-2xl bg-gradient-to-r from-indigo-600 via-indigo-500 to-cyan-500 hover:brightness-110 text-white font-black text-sm sm:text-base transition-all shadow-xl shadow-indigo-600/40 flex items-center gap-2 active:scale-95 cursor-pointer"
-            >
-              <Play className="w-5 h-5 fill-white" />
-              <span>DEPLOY TO ARENA</span>
-            </button>
-
-            {isPortrait && (
+            <div className="flex flex-col sm:flex-row items-center gap-4 mt-8">
               <button
-                id="btn-start-auto-rotate"
-                onClick={handleAutoRotateLandscape}
-                className="px-5 py-3 rounded-2xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-mono text-xs font-bold transition-all border border-amber-500/40 flex items-center gap-1.5 cursor-pointer active:scale-95"
+                id="btn-enter-battle-royale"
+                onClick={(e) => {
+                  const audio = document.getElementById('bg-music') as HTMLAudioElement;
+                  if (audio) audio.pause();
+                  handleStartMatch(e as any);
+                }}
+                className="px-10 py-4 rounded-full bg-gradient-to-r from-rose-600 to-rose-500 hover:from-rose-500 hover:to-rose-400 text-white font-black text-lg transition-transform shadow-xl shadow-rose-600/40 flex items-center gap-3 active:scale-95 cursor-pointer border border-rose-400/50"
               >
-                <RotateCw className="w-4 h-4 text-amber-400" />
-                <span>ROTATE TO LANDSCAPE</span>
+                <Play className="w-6 h-6 fill-white" />
+                <span>DEPLOY TO ARENA</span>
               </button>
-            )}
 
-            <button
-              id="btn-open-guide-from-start"
-              onClick={() => setShowGuideModal(true)}
-              className="px-4 py-3 rounded-2xl bg-slate-900 hover:bg-slate-800 text-slate-300 font-mono text-xs font-bold transition-all border border-slate-700 flex items-center gap-1.5 cursor-pointer"
-            >
-              <HelpCircle className="w-4 h-4 text-indigo-400" />
-              <span>HOW TO PLAY GUIDE</span>
-            </button>
+              <button
+                id="btn-open-guide-from-start"
+                onClick={() => setShowGuideModal(true)}
+                className="px-8 py-4 rounded-full bg-slate-900/80 hover:bg-slate-800 text-white font-mono text-sm font-bold transition-transform border border-slate-700/50 flex items-center gap-2 cursor-pointer backdrop-blur-md active:scale-95"
+              >
+                <HelpCircle className="w-5 h-5 text-indigo-400" />
+                <span>HOW TO PLAY</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-auto pt-8 pb-4 text-slate-400 font-mono text-xs z-10 font-bold tracking-widest">
+            DEVELOPED BY ANIKET
           </div>
         </div>
       )}
@@ -3177,6 +3283,33 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
               <span>RESTART MATCH</span>
             </button>
 
+            {/* Sensitivity Slider */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-2.5 flex items-center justify-between text-xs text-slate-300">
+              <span className="flex items-center gap-1.5">
+                <Sliders className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Aim Sens: {mouseSensitivity}x</span>
+              </span>
+              <input
+                type="range"
+                min="0.8"
+                max="4.0"
+                step="0.2"
+                value={mouseSensitivity}
+                onChange={(e) => setMouseSensitivity(parseFloat(e.target.value))}
+                className="w-24 sm:w-28 h-1.5 bg-slate-800 rounded appearance-none cursor-pointer accent-indigo-500"
+              />
+            </div>
+
+            {/* Sound SFX Toggle */}
+            <button
+              id="btn-sound-from-pause"
+              onClick={() => setIsSoundMuted(!isSoundMuted)}
+              className="w-full py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 font-bold text-xs border border-slate-800 flex items-center justify-center gap-2 cursor-pointer"
+            >
+              {isSoundMuted ? <VolumeX className="w-4 h-4 text-rose-400" /> : <Volume2 className="w-4 h-4 text-emerald-400" />}
+              <span>{isSoundMuted ? 'UNMUTE SOUND' : 'MUTE SOUND'}</span>
+            </button>
+
             <button
               id="btn-guide-from-pause"
               onClick={() => setShowGuideModal(true)}
@@ -3185,17 +3318,6 @@ export const ThreeFPSGame: React.FC<ThreeFPSGameProps> = ({ settings, onOpenStud
               <HelpCircle className="w-4 h-4 text-indigo-400" />
               <span>HOW TO PLAY GUIDE</span>
             </button>
-
-            {onOpenStudio && (
-              <button
-                id="btn-studio-from-pause"
-                onClick={onOpenStudio}
-                className="w-full py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 font-bold text-xs border border-slate-800 flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <Code2 className="w-4 h-4 text-emerald-400" />
-                <span>UNITY C# SCRIPTS & ASSETS</span>
-              </button>
-            )}
           </div>
         </div>
       )}
